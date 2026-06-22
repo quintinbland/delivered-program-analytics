@@ -1,48 +1,31 @@
-# Delivered Program Analytics System
+# Delivered Program Analytics
 
-A production-grade analytics pipeline for delivered produce distribution — rebuilt from a legacy workbook-based process into a normalized, modular, automation-ready data system.
+Produce distribution analytics pipeline — dimensional data model, business rule engine, and transformation pipeline built with synthetic data.
+
+---
+
+## Project Status
+
+**Pipeline: COMPLETE — All 6 modules built and committed.**
+
+| Module | Scripts | Status |
+|---|---|---|
+| 1 — Staging Layer | 5 | ✅ Complete |
+| 2 — Dimension Build | 7 | ✅ Complete |
+| 3 — Fact Tables | 3 | ✅ Complete |
+| 4 — Calculation Engine | 4 | ✅ Complete |
+| 5 — Exception System | 6 | ✅ Complete |
+| 6 — Reporting Layer | 5 | ✅ Complete |
+| 7 — Forecasting | — | 🔲 Future |
+| 8 — Planting Readiness | — | 🔲 Future |
 
 ---
 
 ## Overview
 
-This project redesigns an operational analytics workflow used to manage the economics of a delivered produce program. The original system was a complex, formula-heavy workbook. This rebuild replaces it with a structured dimensional data model, a rule-based calculation engine, and a modular transformation pipeline designed for Power BI or any modern BI platform.
+This repository rebuilds a legacy Excel-based delivered produce program analytics system into a production-grade dimensional data model and SQL transformation pipeline. All data is fully synthetic — no real customer, pricing, or operational data is used.
 
-**Core business questions this system answers:**
-
-- How profitable is each delivered load after freight cost?
-- How does actual FOB price compare to contracted FOB by customer and commodity?
-- Which customers, ship-to locations, and commodities are driving margin erosion?
-- Where are contract pricing gaps, freight losses, and underutilized loads?
-
----
-
-## System Architecture
-
-```
-RAW INPUTS
-├── ERP sales/order line data
-├── Load-level freight data
-├── Contract pricing reference
-├── Product master / commodity mapping
-└── Customer / ship-to reference
-        ↓
-STAGING LAYER
-└── Standardize, deduplicate, validate
-        ↓
-DIMENSIONAL MODEL
-├── Facts:  SalesOrderLine · LoadFreight · ContractPrice
-└── Dims:   Customer · ShipTo · Product · Commodity · Date · Carrier · CustomerStatus
-        ↓
-CALCULATION ENGINE
-└── ActualFOB · FOBVariance · FreightMargin · ContractMatchRate · LoadUtilization
-        ↓
-EXCEPTION DETECTION
-└── Missing contracts · Negative margins · Orphan records · Duplicate keys · Invalid data
-        ↓
-REPORTING LAYER
-└── Executive KPIs · Customer HQ · Ship-To Drilldown · Commodity · Time Period
-```
+**Purpose:** Professional portfolio demonstration of end-to-end data engineering practices including dimensional modeling, business rule extraction, exception handling, and reporting layer design.
 
 ---
 
@@ -50,244 +33,276 @@ REPORTING LAYER
 
 ```
 delivered-program-analytics/
-│
 ├── README.md
-│
+├── LICENSE
+├── .gitignore
+├── .github/
+│   └── CHANGELOG.md
 ├── data/
 │   └── dummy/
-│       └── DeliveredProgram_DummyDataset.xlsx   # Synthetic validation dataset
-│
-├── sql/
-│   ├── staging/          # Raw → staging transformations
-│   ├── dimensions/       # Dimension table builds
-│   ├── facts/            # Fact table builds
-│   ├── calculations/     # Business measure logic
-│   ├── exceptions/       # Exception detection queries
-│   └── reporting/        # Reporting layer aggregations
-│
-├── scripts/
-│   └── generate_dummy_data.py    # Reproducible synthetic dataset generator
-│
+│       └── DeliveredProgram_DummyDataset.xlsx
 ├── docs/
-│   ├── data_model.md             # Entity definitions and relationships
-│   ├── business_rules.md         # Full rule set documentation
-│   ├── system_spec.md            # Complete system rebuild specification
-│   └── unknowns_log.md           # Open items requiring business confirmation
-│
-└── .github/
-    └── CHANGELOG.md
+│   ├── data_model.md
+│   ├── business_rules.md
+│   └── unknowns_log.md
+└── sql/
+    ├── staging/
+    │   ├── stg_sales_order_line.sql
+    │   ├── stg_load_freight.sql
+    │   ├── stg_contract_pricing.sql
+    │   ├── stg_product_master.sql
+    │   └── stg_customer_reference.sql
+    ├── dimensions/
+    │   ├── dim_customer_status.sql
+    │   ├── dim_commodity.sql
+    │   ├── dim_date.sql
+    │   ├── dim_carrier.sql
+    │   ├── dim_product.sql
+    │   ├── dim_shipto.sql
+    │   └── dim_customer.sql
+    ├── facts/
+    │   ├── fact_load_freight.sql
+    │   ├── fact_contract_price.sql
+    │   └── fact_sales_order_line.sql
+    ├── calculations/
+    │   ├── calc_freight_summary.sql
+    │   ├── calc_fob_variance_summary.sql
+    │   ├── calc_customer_performance.sql
+    │   └── calc_load_utilization.sql
+    ├── exceptions/
+    │   ├── exc_missing_contract_pricing.sql
+    │   ├── exc_negative_fob_variance.sql
+    │   ├── exc_negative_freight_margin.sql
+    │   ├── exc_missing_mappings.sql
+    │   ├── exc_data_quality.sql
+    │   └── exc_master.sql
+    └── reporting/
+        ├── rpt_executive_summary.sql
+        ├── rpt_fob_variance_detail.sql
+        ├── rpt_freight_performance.sql
+        ├── rpt_exception_dashboard.sql
+        └── rpt_customer_scorecard.sql
 ```
 
 ---
 
-## Data Model
+## Data Architecture
 
-### Fact Tables
+### Source Inputs (6 raw sources)
 
-| Table | Grain | Primary Key | Row Count (Dummy) |
-|---|---|---|---|
-| `Fact_SalesOrderLine` | One row per order line / item / load | `SalesOrderLineKey` | ~366 |
-| `Fact_LoadFreight` | One row per load | `LoadID` | ~121 |
-| `Fact_ContractPrice` | One row per contract pricing rule | `ContractPriceKey` | ~55 |
-
-### Dimension Tables
-
-| Table | Description |
+| Source Table | Description |
 |---|---|
-| `Dim_Customer` | Customer master with HQ grouping and status |
-| `Dim_ShipTo` | Destination / DC level |
-| `Dim_Product` | Item master with commodity mapping |
-| `Dim_Commodity` | Governed commodity hierarchy |
-| `Dim_Date` | Calendar with YTD, rolling 4-week, rolling 8-week flags |
-| `Dim_CustomerStatus` | Contract / Open Market / Commit classification |
-| `Dim_Carrier` | Freight carrier master |
+| Raw_SalesOrderLine | Sales order transaction lines |
+| Raw_LoadFreight | Load and freight records |
+| Raw_ContractPricing | Contract FOB pricing rules |
+| Raw_ProductMaster | Item and commodity reference |
+| Raw_CustomerReference | Customer and HQ reference |
+| Raw_ShipToReference | Ship-to location reference |
 
-### Key Relationships
+### Dimensional Model
 
-```
-Fact_SalesOrderLine.LoadID      → Fact_LoadFreight.LoadID
-Fact_SalesOrderLine.ItemID      → Dim_Product.ItemID
-Fact_SalesOrderLine.CustomerID  → Dim_Customer.CustomerID
-Fact_SalesOrderLine.ShipToID    → Dim_ShipTo.ShipToID
-Fact_SalesOrderLine.ShipDateKey → Dim_Date.DateKey
-Fact_LoadFreight.CarrierID      → Dim_Carrier.CarrierID
-Dim_Product.CommodityID         → Dim_Commodity.CommodityID
-Dim_Customer.CustomerStatusKey  → Dim_CustomerStatus.CustomerStatusKey
-```
+**Fact Tables**
 
----
-
-## Business Rule Engine
-
-All business logic is extracted into explicit, structured rule definitions. No logic is embedded in formulas or implicit in transformations.
-
-### Pricing Rules
-
-```
-ActualFOB:
-  IF QuantityCases > 0
-  THEN ActualFOB = NetLineRevenue / QuantityCases
-  ELSE ActualFOB = NULL
-
-FOBVariancePerCase:
-  IF ActualFOB IS NOT NULL AND ContractFOB IS NOT NULL
-  THEN FOBVariancePerCase = ActualFOB - ContractFOB
-  ELSE FOBVariancePerCase = NULL
-
-TotalFOBVariance:
-  IF FOBVariancePerCase IS NOT NULL
-  THEN TotalFOBVariance = FOBVariancePerCase * QuantityCases
-  ELSE TotalFOBVariance = NULL
-
-PricingResult:
-  IF TotalFOBVariance > 0  → 'Favorable'
-  IF TotalFOBVariance = 0  → 'At Contract'
-  IF TotalFOBVariance < 0  → 'Unfavorable'
-  IF TotalFOBVariance IS NULL → 'No Contract Match'
-```
-
-### Freight Rules
-
-```
-FreightMargin    = FreightCharged - FreightPaid
-
-FreightMarginPct:
-  IF FreightCharged > 0
-  THEN FreightMarginPct = FreightMargin / FreightCharged
-  ELSE FreightMarginPct = NULL
-```
-
-### Load Utilization Rules
-
-```
-LoadUtilizationBand:
-  IF LoadPallets >= 24  → 'Full'
-  IF LoadPallets >= 18  → 'Partial'
-  IF LoadPallets < 18   → 'Underutilized'
-
-  NOTE: TargetFullTruckloadPallets = UNKNOWN — 24 used as candidate threshold
-```
-
-### Contract Matching Hierarchy (Candidate — Pending Confirmation)
-
-```
-1. CustomerID  + ItemID      + ShipDate within effective dates
-2. CustomerHQID + ItemID     + ShipDate within effective dates
-3. CustomerHQID + CommodityID + ShipDate within effective dates
-4. No Match → ContractFOB = NULL, ContractMatchFlag = FALSE
-```
-
----
-
-## Exception Detection
-
-| Exception | Rule |
-|---|---|
-| Missing Contract Pricing | `CustomerStatus = 'Contract' AND ContractFOB IS NULL` |
-| Negative FOB Variance | `TotalFOBVariance < 0` |
-| Negative Freight Margin | `FreightMargin < 0` |
-| Missing Commodity Mapping | `ItemID IS NOT NULL AND CommodityID IS NULL` |
-| Missing Customer Mapping | `CustomerID in transactions AND not in Dim_Customer` |
-| Missing Ship-To Mapping | `ShipToID in transactions AND not in Dim_ShipTo` |
-| Duplicate Sales Line Key | `COUNT(SalesOrderID + LoadID + ItemID) > 1` |
-| Invalid Quantity | `QuantityCases <= 0 OR QuantityCases IS NULL` |
-| Missing LoadID | `LoadID IS NULL` |
-| Underutilized Load | `LoadPallets < TargetFullTruckloadPallets` |
-
----
-
-## Reporting Outputs
-
-| Report | Audience | Key Metrics |
+| Table | Grain | Primary Key |
 |---|---|---|
-| Executive KPI Overview | Leadership | Revenue, cases, FOB variance, freight margin, load count |
-| Customer HQ Freight Performance | Sales / Ops | Freight charged, paid, margin %, avg pallets/load |
-| Customer Status Freight Performance | Finance | Contract vs Open Market vs Commit freight economics |
-| Customer HQ Sales Variance | Sales / Pricing | FOB variance by customer HQ, contract match rate |
-| Ship-To Performance Drilldown | Account Mgmt | DC-level margin, cases, load metrics |
-| Ship-To Commodity Pricing Detail | Pricing | Actual vs contract FOB by DC and commodity |
-| Ship-To Load Metrics | Logistics | Load efficiency at DC level |
-| Time Period Performance Summary | Leadership | Last 4W / Last 8W / YTD comparison |
+| Fact_SalesOrderLine | One row per SalesOrderID + LoadID + ItemID | SalesOrderLineKey |
+| Fact_LoadFreight | One row per LoadID | LoadID |
+| Fact_ContractPrice | One row per contract pricing rule | ContractPriceKey |
 
----
+**Dimension Tables**
 
-## Synthetic Dataset
-
-The `data/dummy/` directory contains a fully synthetic dataset generated by `scripts/generate_dummy_data.py`. It is not derived from any real operational data.
-
-**Intentional data quality issues included for pipeline testing:**
-
-| Issue | Location | Exception Triggered |
+| Table | Primary Key | Description |
 |---|---|---|
-| NULL CommodityID | 2 product records | `Missing Commodity Mapping` |
-| NULL ShipToID | 3 load records | `Missing ShipTo Mapping` |
-| Duplicate LoadID (conflicting FreightCharged) | Fact_LoadFreight | `Duplicate LoadID` |
-| Contract customer with no ContractFOB | 3 sales lines | `Missing Contract Pricing` |
-| NULL QuantityCases | 3 sales lines | `Invalid Quantity` |
-| Duplicate SalesOrderLineKey (conflicting UnitPrice) | Fact_SalesOrderLine | `Duplicate Transaction Key` |
-| Negative FOB variance | 3 sales lines | `Negative FOB Variance` |
-| Negative freight margin | ~15% of loads | `Negative Freight Margin` |
-| Orphan ShipTo → ghost CustomerID | STO012 | Referential integrity stress test |
-| Expired contract record | Fact_ContractPrice | Date filter boundary test |
+| Dim_Customer | CustomerKey | Customer master with HQ grouping |
+| Dim_ShipTo | ShipToKey | Ship-to location master |
+| Dim_Product | ProductKey | Item master with commodity FK |
+| Dim_Commodity | CommodityKey | Commodity reference |
+| Dim_Date | DateKey (YYYYMMDD) | Generated calendar and fiscal date dimension |
+| Dim_CustomerStatus | CustomerStatusKey | Contract / OpenMarket / Commit classification |
+| Dim_Carrier | CarrierKey | Carrier reference derived from freight data |
 
----
+**Key Relationships**
 
-## Open Items
-
-The following items require business confirmation before production implementation. See `docs/unknowns_log.md` for full tracking.
-
-- Contract matching hierarchy (exact priority order)
-- Target full truckload pallet threshold
-- `OnTargetFlag` exact row-level definition
-- Rolling period date basis (system date vs. latest ship date vs. user-selected)
-- Refresh cadence and credential ownership
-- Whether freight charged represents billed, budgeted, allocated, or contractual amount
-- Whether organic/conventional flag is a governed field or inferred
+- `Fact_SalesOrderLine.LoadID` → `Fact_LoadFreight.LoadID`
+- `Fact_SalesOrderLine.ItemID` → `Dim_Product.ItemID`
+- `Fact_SalesOrderLine.CustomerID` → `Dim_Customer.CustomerID`
+- `Fact_SalesOrderLine.ShipToID` → `Dim_ShipTo.ShipToID`
+- `Fact_SalesOrderLine.ShipDateKey` → `Dim_Date.DateKey`
+- `Fact_LoadFreight.CarrierID` → `Dim_Carrier.CarrierID`
+- `Dim_Product.CommodityID` → `Dim_Commodity.CommodityID`
+- `Dim_Customer.CustomerStatusKey` → `Dim_CustomerStatus.CustomerStatusKey`
 
 ---
 
 ## Build Sequence
 
-| Step | Module | Output |
+Scripts must be executed in dependency order. All scripts within a module are independently deployable within module constraints.
+
+### Module 1 — Staging Layer
+
+No dependencies. Run in any order.
+
+```
+sql/staging/stg_customer_reference.sql
+sql/staging/stg_product_master.sql
+sql/staging/stg_sales_order_line.sql
+sql/staging/stg_load_freight.sql
+sql/staging/stg_contract_pricing.sql
+```
+
+### Module 2 — Dimension Build
+
+Depends on Module 1. Build in dependency order:
+
+```
+sql/dimensions/dim_customer_status.sql   -- No dependencies
+sql/dimensions/dim_commodity.sql         -- No dependencies
+sql/dimensions/dim_date.sql              -- No dependencies
+sql/dimensions/dim_carrier.sql           -- Requires Stg_LoadFreight
+sql/dimensions/dim_shipto.sql            -- No dependencies
+sql/dimensions/dim_product.sql           -- Requires Dim_Commodity
+sql/dimensions/dim_customer.sql          -- Requires Dim_CustomerStatus
+```
+
+### Module 3 — Fact Tables
+
+Depends on Modules 1 and 2. Build in order:
+
+```
+sql/facts/fact_load_freight.sql          -- Requires Dim_Carrier, Dim_ShipTo, Dim_Date
+sql/facts/fact_contract_price.sql        -- Requires Dim_Customer, Dim_Product, Dim_Commodity, Dim_Date
+sql/facts/fact_sales_order_line.sql      -- Requires all dimensions + Stg_ContractPricing + Fact_LoadFreight
+```
+
+### Module 4 — Calculation Engine
+
+Depends on Module 3. Run in any order:
+
+```
+sql/calculations/calc_freight_summary.sql
+sql/calculations/calc_fob_variance_summary.sql
+sql/calculations/calc_load_utilization.sql
+sql/calculations/calc_customer_performance.sql
+```
+
+### Module 5 — Exception System
+
+Depends on Modules 1–3. Run individual scripts before master:
+
+```
+sql/exceptions/exc_missing_contract_pricing.sql
+sql/exceptions/exc_negative_fob_variance.sql
+sql/exceptions/exc_negative_freight_margin.sql
+sql/exceptions/exc_missing_mappings.sql
+sql/exceptions/exc_data_quality.sql
+sql/exceptions/exc_master.sql            -- Run last; depends on all above
+```
+
+### Module 6 — Reporting Layer
+
+Depends on Modules 4 and 5. Run in any order:
+
+```
+sql/reporting/rpt_executive_summary.sql
+sql/reporting/rpt_fob_variance_detail.sql
+sql/reporting/rpt_freight_performance.sql
+sql/reporting/rpt_exception_dashboard.sql
+sql/reporting/rpt_customer_scorecard.sql
+```
+
+---
+
+## Key Business Logic
+
+### Pricing
+
+| Measure | Formula | Null Condition |
 |---|---|---|
-| 1 | Data Ingestion | Staging tables |
-| 2 | Dimension Build | Dim_* tables |
-| 3 | Freight Fact | Fact_LoadFreight |
-| 4 | Sales Line Fact | Fact_SalesOrderLine |
-| 5 | Contract Pricing Fact | Fact_ContractPrice |
-| 6 | Calculation Engine | Standard measures |
-| 7 | Exception System | Exception tables |
-| 8 | Reporting Layer | Dashboard outputs |
-| 9 | Forecasting *(future)* | Fact_Forecast |
-| 10 | Planting Readiness *(future)* | Fact_PlantingReadiness |
+| ActualFOB | `NetLineRevenue / QuantityCases` | NULL if QuantityCases = 0 or NULL |
+| FOBVariancePerCase | `ActualFOB - ContractFOBPrice` | NULL if either input is NULL |
+| TotalFOBVariance | `FOBVariancePerCase * QuantityCases` | NULL if either input is NULL |
+| ExcessSalesProfit | `TotalFOBVariance` | Explicit alias — always equals TotalFOBVariance |
 
----
+### Freight
 
-## Status
+| Measure | Formula | Null Condition |
+|---|---|---|
+| FreightMargin | `FreightCharged - FreightPaid` | NULL if either input is NULL |
+| FreightMarginPct | `FreightMargin / FreightCharged` | NULL if FreightCharged = 0 or NULL |
 
-| Module | Status |
+### Contract Matching Hierarchy (CANDIDATE — UNK-001)
+
+| Tier | Match Keys |
 |---|---|
-| System Specification | ✅ Complete |
-| Dummy Dataset | ✅ Complete |
-| SQL — Staging Layer | 🔲 In Progress |
-| SQL — Dimension Build | 🔲 Planned |
-| SQL — Fact Build | 🔲 Planned |
-| SQL — Calculation Engine | 🔲 Planned |
-| SQL — Exception Detection | 🔲 Planned |
-| SQL — Reporting Layer | 🔲 Planned |
-| Power BI Model | 🔲 Future |
-| Forecasting Module | 🔲 Future |
+| Tier 1 | CustomerID + ItemID + ShipDate within effective range |
+| Tier 2 | CustomerHQID + ItemID + ShipDate within effective range |
+| Tier 3 | CustomerHQID + CommodityID + ShipDate within effective range |
+| Tier 4 | No match → ContractFOBPrice = NULL |
+
+All contract-matched rows carry `Flag_CandidateHierarchy_UNK001 = 1`.
+
+### Load Utilization (CANDIDATE — UNK-002)
+
+| Band | Condition |
+|---|---|
+| Full | LoadPallets >= 24 |
+| Partial | LoadPallets >= 18 AND < 24 |
+| Underutilized | LoadPallets < 18 |
+| UNKNOWN | LoadPallets IS NULL |
+
+Threshold of 24 is a candidate value. All rows carry `Flag_CandidateThreshold_UNK002 = 1`.
 
 ---
 
-## Technologies
+## Exception Types
 
-- **Data Model:** Dimensional (star schema), production SQL-ready
-- **Transformation Logic:** SQL (ANSI-compatible, tested against T-SQL / Snowflake dialect)
-- **Synthetic Data:** Python (pandas, numpy, openpyxl)
-- **Target BI Platform:** Power BI (semantic model)
-- **Source System:** ERP (Dynamics AX / connected export)
+| Exception | Rule | Severity |
+|---|---|---|
+| MISSING_CONTRACT_PRICING | CustomerStatus = CONTRACT AND ContractFOBPrice IS NULL | HIGH |
+| NEGATIVE_FOB_VARIANCE | TotalFOBVariance < 0 | HIGH |
+| NEGATIVE_FREIGHT_MARGIN | FreightMargin < 0 | HIGH |
+| MISSING_COMMODITY_MAPPING | ItemID IS NOT NULL AND CommodityID IS NULL | MEDIUM |
+| MISSING_CUSTOMER_MAPPING | CustomerID in transactions NOT IN Dim_Customer | HIGH |
+| MISSING_SHIPTO_MAPPING | ShipToID in transactions NOT IN Dim_ShipTo | MEDIUM |
+| DUPLICATE_SALES_LINE_KEY | COUNT(SalesOrderID + LoadID + ItemID) > 1 | HIGH |
+| INVALID_QUANTITY | QuantityCases <= 0 OR QuantityCases IS NULL | HIGH |
+| MISSING_LOAD_ID | LoadID IS NULL on sales order line | HIGH |
+| DUPLICATE_LOAD_ID | COUNT(LoadID) > 1 in Stg_LoadFreight | HIGH |
+| DUPLICATE_CONTRACT_KEY | COUNT(ContractPriceKey) > 1 in Stg_ContractPricing | HIGH |
+| INVERTED_CONTRACT_DATE | EffectiveDate > ExpirationDate | HIGH |
+
+All exceptions are unified in `Exc_Master` with owner domain, resolution guidance, and resolution status tracking.
 
 ---
 
-*This project uses entirely synthetic data. No real customer, pricing, or operational data is included.*
+## SQL Dialect
+
+ANSI SQL (T-SQL / Snowflake compatible). All dialect-specific syntax is marked inline with `[DIALECT NOTE]`. The `dim_date.sql` script includes both a Snowflake primary block and a commented T-SQL equivalent.
+
+---
+
+## Open Unknowns
+
+See `docs/unknowns_log.md` for full tracking. Top open items affecting pipeline behavior:
+
+| ID | Item | Impact | Affected Scripts |
+|---|---|---|---|
+| UNK-001 | Contract matching hierarchy — candidate applied | HIGH | fact_sales_order_line, fact_contract_price, all calc/rpt scripts |
+| UNK-002 | Target full truckload pallet threshold = 24 (candidate) | MEDIUM | stg_load_freight, fact_load_freight, calc_freight_summary, calc_load_utilization, rpt_freight_performance |
+| UNK-003 | OnTargetFlag row-level definition | HIGH | Excluded from all scripts pending confirmation |
+| UNK-004 | Rolling period date basis / fiscal year start | MEDIUM | dim_date fiscal calendar fields |
+| UNK-007 | FreightCharged semantics (billed / budgeted / allocated) | HIGH | stg_load_freight, fact_load_freight, exc_negative_freight_margin |
+
+---
+
+## Synthetic Dataset
+
+Located at `data/dummy/DeliveredProgram_DummyDataset.xlsx`.
+
+12 entities covering all tables in the canonical data model. Intentional data quality issues baked in for pipeline and exception testing including: missing commodity mappings, duplicate keys, invalid quantities, NULL LoadIDs, negative margin transactions, and contract customers with no matching contract records.
+
+---
+
+## License
+
+MIT
