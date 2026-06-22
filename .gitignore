@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Data — never commit real data
+data/real/
+data/raw/
+*.csv
+!data/dummy/*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Credentials
+*.env
+secrets.json
+connection_strings.txt
