@@ -4,7 +4,9 @@
 -- INPUT:       Stg_SalesOrderLine, Dim_Customer, Dim_Product, Dim_ShipTo,
 --              Dim_Date, Stg_ContractPricing (for historical contract matching)
 -- OUTPUT:      Fact_SalesOrderLine
--- DIALECT:     ANSI SQL (T-SQL / Snowflake compatible; dialect notes inline)
+-- DIALECT:     DuckDB (patched from Snowflake original — STRFTIME applied)
+-- PATCHED:      TO_CHAR date key expressions replaced with STRFTIME
+-- VERSION:      1.0.1
 -- VERSION:     1.0.0
 -- DEPENDENCIES:
 --   Stg_SalesOrderLine   (Module 1)
@@ -90,12 +92,12 @@ dim_resolved AS (
         -- DateKeys
         CASE
             WHEN s.ShipDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.ShipDate,  'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.ShipDate,  '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS ShipDateKey,
         CASE
             WHEN s.OrderDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.OrderDate, 'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.OrderDate, '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS OrderDateKey,
 
