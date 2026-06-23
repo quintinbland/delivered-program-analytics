@@ -1,0 +1,69 @@
+-- =============================================================================
+-- DIALECT PATCH:  DuckDB — Date Key Expression Reference
+-- PURPOSE:        Documents all expressions requiring substitution when running
+--                 pipeline scripts in DuckDB
+-- =============================================================================
+-- DuckDB does not support TO_CHAR(date, 'YYYYMMDD').
+-- Replace with: CAST(STRFTIME(date, '%Y%m%d') AS INTEGER)
+--
+-- This patch applies to the following scripts and expressions:
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- AFFECTED SCRIPTS AND REQUIRED SUBSTITUTIONS
+-- -----------------------------------------------------------------------------
+
+-- fact_load_freight.sql
+-- fact_contract_price.sql
+-- fact_sales_order_line.sql
+--
+-- FIND:
+--   CAST(TO_CHAR(s.ShipDate,       'YYYYMMDD') AS INTEGER)
+--   CAST(TO_CHAR(s.OrderDate,      'YYYYMMDD') AS INTEGER)
+--   CAST(TO_CHAR(s.LoadDate,       'YYYYMMDD') AS INTEGER)
+--   CAST(TO_CHAR(s.DeliveryDate,   'YYYYMMDD') AS INTEGER)
+--   CAST(TO_CHAR(s.EffectiveDate,  'YYYYMMDD') AS INTEGER)
+--   CAST(TO_CHAR(s.ExpirationDate, 'YYYYMMDD') AS INTEGER)
+--
+-- REPLACE WITH:
+--   CAST(STRFTIME(s.ShipDate,       '%Y%m%d') AS INTEGER)
+--   CAST(STRFTIME(s.OrderDate,      '%Y%m%d') AS INTEGER)
+--   CAST(STRFTIME(s.LoadDate,       '%Y%m%d') AS INTEGER)
+--   CAST(STRFTIME(s.DeliveryDate,   '%Y%m%d') AS INTEGER)
+--   CAST(STRFTIME(s.EffectiveDate,  '%Y%m%d') AS INTEGER)
+--   CAST(STRFTIME(s.ExpirationDate, '%Y%m%d') AS INTEGER)
+
+-- -----------------------------------------------------------------------------
+-- PATCH VERIFICATION QUERY
+-- Run after executing patched fact scripts to confirm date keys resolve
+-- -----------------------------------------------------------------------------
+-- SELECT ShipDateKey, COUNT(*) AS RowCount
+-- FROM Fact_SalesOrderLine
+-- WHERE ShipDateKey <> -1
+-- GROUP BY ShipDateKey
+-- ORDER BY ShipDateKey
+-- LIMIT 10;
+-- EXPECTED: Integer values in YYYYMMDD format, e.g. 20230115
+
+-- -----------------------------------------------------------------------------
+-- ALL OTHER PIPELINE SCRIPTS
+-- -----------------------------------------------------------------------------
+-- No additional dialect changes required for DuckDB beyond:
+--   1. dim_date.sql  → use dim_date_duckdb.sql patch (GENERATOR → generate_series)
+--   2. Fact scripts  → apply STRFTIME substitution above
+--
+-- The following are natively supported in DuckDB and require no change:
+--   CREATE OR REPLACE TABLE x AS ...   SUPPORTED
+--   TRY_CAST(x AS DATE)                SUPPORTED
+--   TRY_CAST(x AS DECIMAL)             SUPPORTED
+--   CURRENT_TIMESTAMP                  SUPPORTED
+--   ROW_NUMBER() OVER (...)            SUPPORTED
+--   LAG() OVER (...)                   SUPPORTED
+--   COALESCE(...)                      SUPPORTED
+--   TRIM(...)                          SUPPORTED
+--   UPPER(...)                         SUPPORTED
+--   CONCAT(...)                        SUPPORTED
+--   MOD(...)                           SUPPORTED
+--   YEAR(), MONTH(), DAY()             SUPPORTED
+--   QUARTER(), DAYOFWEEK()             SUPPORTED
+--   WEEKOFYEAR()                       SUPPORTED
