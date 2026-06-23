@@ -3,7 +3,9 @@
 -- SCRIPT:      fact_contract_price.sql
 -- INPUT:       Stg_ContractPricing, Dim_Customer, Dim_Product, Dim_Commodity, Dim_Date
 -- OUTPUT:      Fact_ContractPrice
--- DIALECT:     ANSI SQL (T-SQL / Snowflake compatible; dialect notes inline)
+-- DIALECT:     DuckDB (patched from Snowflake original — STRFTIME applied)
+-- PATCHED:      TO_CHAR date key expressions replaced with STRFTIME
+-- VERSION:      1.0.1
 -- VERSION:     1.0.0
 -- DEPENDENCIES:
 --   Stg_ContractPricing  (Module 1)
@@ -79,12 +81,12 @@ resolved AS (
         -- Date keys
         CASE
             WHEN s.EffectiveDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.EffectiveDate,   'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.EffectiveDate,   '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS EffectiveDateKey,
         CASE
             WHEN s.ExpirationDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.ExpirationDate,  'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.ExpirationDate,  '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS ExpirationDateKey,
 

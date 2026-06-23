@@ -3,7 +3,9 @@
 -- SCRIPT:      fact_load_freight.sql
 -- INPUT:       Stg_LoadFreight, Dim_Carrier, Dim_ShipTo, Dim_Date
 -- OUTPUT:      Fact_LoadFreight
--- DIALECT:     ANSI SQL (T-SQL / Snowflake compatible; dialect notes inline)
+-- DIALECT:     DuckDB (patched from Snowflake original — STRFTIME applied)
+-- PATCHED:      TO_CHAR date key expressions replaced with STRFTIME
+-- VERSION:      1.0.1
 -- VERSION:     1.0.0
 -- DEPENDENCIES:
 --   Stg_LoadFreight     (Module 1)
@@ -67,18 +69,18 @@ resolved AS (
         COALESCE(dst.ShipToKey, -1)                     AS ShipToKey,
 
         -- LoadDateKey (YYYYMMDD integer)
-        -- [DIALECT NOTE] Snowflake: TO_NUMBER(TO_CHAR(LoadDate, 'YYYYMMDD'))
-        -- T-SQL: CAST(CONVERT(VARCHAR, LoadDate, 112) AS INT)
+        -- [DIALECT: DUCKDB] STRFTIME(date, '%Y%m%d') used in place of TO_CHAR
+        
         CASE
             WHEN s.LoadDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.LoadDate, 'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.LoadDate, '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS LoadDateKey,
 
         -- DeliveryDateKey
         CASE
             WHEN s.DeliveryDate IS NOT NULL
-            THEN CAST(TO_CHAR(s.DeliveryDate, 'YYYYMMDD') AS INTEGER)
+            THEN CAST(STRFTIME(s.DeliveryDate, '%Y%m%d') AS INTEGER)
             ELSE -1
         END                                             AS DeliveryDateKey,
 
