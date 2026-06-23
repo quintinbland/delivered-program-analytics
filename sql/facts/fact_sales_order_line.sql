@@ -84,7 +84,7 @@ dim_resolved AS (
 
         -- ProductKey + CommodityID (CommodityID needed for Tier 3 matching)
         COALESCE(dp.ProductKey, -1)                     AS ProductKey,
-        dp.CommodityID                                  AS CommodityID,
+        dp.CommodityID_Source                           AS CommodityID,
 
         -- ShipToKey
         COALESCE(dst.ShipToKey, -1)                     AS ShipToKey,
@@ -228,13 +228,37 @@ tier3 AS (
     )
 ),
 
--- Union all tiers; each transaction row appears at most once (lowest tier wins)
-contract_matched AS (
+-- Union all tiers then deduplicate: one contract per transaction row.
+-- If multiple contracts match at the same tier (overlapping scope),
+-- pick the one with the lowest ContractFOBPrice (most favorable to buyer).
+-- ROW_NUMBER enforces one-row-per-natural-key guarantee.
+all_tiers AS (
     SELECT * FROM tier1
     UNION ALL
     SELECT * FROM tier2
     UNION ALL
     SELECT * FROM tier3
+),
+
+contract_matched AS (
+    SELECT
+        SalesOrderID,
+        LoadID,
+        ItemID_Source,
+        ContractFOBPrice,
+        ContractPriceKey,
+        MatchTier,
+        ContractMatchTier
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY SalesOrderID, LoadID, ItemID_Source
+                ORDER BY MatchTier ASC, ContractFOBPrice ASC
+            ) AS _rn
+        FROM all_tiers
+    ) ranked
+    WHERE _rn = 1
 ),
 
 -- ---------------------------------------------------------------------------
