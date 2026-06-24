@@ -4,13 +4,19 @@
 -- INPUT:       Stg_LoadFreight, Dim_Carrier, Dim_Date
 -- OUTPUT:      Fact_LoadFreight
 -- DIALECT:     DuckDB (STRFTIME patch applied)
--- VERSION:     1.0.2 — Real data column fixes (2026-06-24)
+-- VERSION:     1.1.0 — Mode_of_Delivery, Mode_Clean, FreightStatus added (UNK-008 resolved)
 -- =============================================================================
--- CHANGE LOG (v1.0.2):
---   - FreightPaid → FreightCost (renamed in stg_load_freight v2.0)
---   - Flag_CandidateThreshold_UNK002 removed (UNK-002 resolved: 24 pallets)
---   - ShipToID join removed from Dim_ShipTo lookup (no ShipToID in staging v2.0)
---     ShipToKey defaults to -1 for all rows — expected behavior with real data
+-- CHANGE LOG:
+--   v1.1.0 (2026-06-24):
+--     - Mode_of_Delivery, Mode_Clean, FreightStatus added from Stg_LoadFreight v2.2.0
+--     - Flag_UnknownMode added
+--     - source filter updated: IsCleanRow = 1 only (removes Flag_FreightChargedSuspect
+--       fallback — FOB zero rows are now IsCleanRow = 1 in staging v2.2.0;
+--       DLV zero rows remain IsCleanRow = 0 and are not loaded to fact)
+--   v1.0.2 (2026-06-24):
+--     - FreightPaid → FreightCost
+--     - Flag_CandidateThreshold_UNK002 removed
+--     - ShipToID join removed
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Fact_LoadFreight AS
@@ -18,16 +24,15 @@ CREATE OR REPLACE TABLE Fact_LoadFreight AS
 WITH
 
 -- ---------------------------------------------------------------------------
--- STEP 1: Source from staging — primary record per LoadID
+-- STEP 1: Source from staging — clean rows only, primary record per LoadID
+-- v1.1.0: IsCleanRow = 1 is now sufficient — FOB zero rows are clean in v2.2.0.
+--         The Flag_FreightChargedSuspect fallback is removed.
 -- ---------------------------------------------------------------------------
 source AS (
     SELECT *
     FROM Stg_LoadFreight
     WHERE DeduplicationRank = 1
-      AND (
-          IsCleanRow = 1
-          OR Flag_FreightChargedSuspect = 1
-      )
+      AND IsCleanRow = 1
 ),
 
 -- ---------------------------------------------------------------------------
@@ -40,7 +45,7 @@ resolved AS (
         -- CarrierKey
         COALESCE(dc.CarrierKey, -1)                     AS CarrierKey,
 
-        -- ShipToKey: no ShipToID in staging v2.0; defaults to -1
+        -- ShipToKey: not available in source; defaults to -1
         -1                                              AS ShipToKey,
 
         -- LoadDateKey (YYYYMMDD integer)
@@ -57,11 +62,16 @@ resolved AS (
             ELSE -1
         END                                             AS DeliveryDateKey,
 
+        -- Mode attributes (new in v1.1.0)
+        s.Mode_of_Delivery,
+        s.Mode_Clean,
+        s.FreightStatus,
+
         -- Measures
         s.FreightCharged,
-        s.FreightCost,          -- renamed from FreightPaid in v2.0
-        s.FreightMargin,
-        s.FreightMarginPct,
+        s.FreightCost,
+        s.FreightMargin,        -- NULL for FOB loads (not applicable)
+        s.FreightMarginPct,     -- NULL for FOB loads (not applicable)
         s.LoadPallets,
         s.LoadWeight,
         s.LoadUtilizationBand,
@@ -74,6 +84,7 @@ resolved AS (
         s.Flag_NegativeFreightMargin,
         s.Flag_UnderutilizedLoad,
         s.Flag_OverfilledLoad,
+        s.Flag_UnknownMode,
         s.IsCleanRow,
 
         -- FK resolution flags
@@ -101,6 +112,9 @@ SELECT
     ShipToKey,
     LoadDateKey,
     DeliveryDateKey,
+    Mode_of_Delivery,
+    Mode_Clean,
+    FreightStatus,
     FreightCharged,
     FreightCost,
     FreightMargin,
@@ -113,6 +127,7 @@ SELECT
     Flag_NegativeFreightMargin,
     Flag_UnderutilizedLoad,
     Flag_OverfilledLoad,
+    Flag_UnknownMode,
     Flag_CarrierNotInDim,
     Flag_ShipToNotInDim,
     IsCleanRow,
