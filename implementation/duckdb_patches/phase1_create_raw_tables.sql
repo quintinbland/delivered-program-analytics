@@ -2,12 +2,11 @@
 -- IMPLEMENTATION: Phase 1 — Raw Table Creation
 -- TARGET:         DuckDB
 -- PURPOSE:        Create all raw landing tables using real source column names
--- VERSION:        2.0.0 — Real data column names (2026-06-23)
+-- VERSION:        2.1.0 — Mode_of_Delivery added; FactKey removed (2026-06-24)
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Raw_SalesOrderLine (
     salesId                 VARCHAR,
-    FactKey                 VARCHAR,
     loadId                  VARCHAR,
     shipTo                  VARCHAR,
     HQ_Name                 VARCHAR,
@@ -17,6 +16,7 @@ CREATE OR REPLACE TABLE Raw_SalesOrderLine (
     qty                     DECIMAL(18,4),
     FOB_Post_Adj            DECIMAL(18,6),
     price                   DECIMAL(18,6),
+    Mode_of_Delivery        VARCHAR,
     SourceSystem            VARCHAR,
     BatchID                 VARCHAR
 );
