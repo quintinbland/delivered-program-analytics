@@ -10,12 +10,10 @@ Tracks all open unknowns, unconfirmed assumptions, and candidate values across t
 
 | Field | Value |
 |---|---|
-| Status | OPEN |
+| Status | CONFIRMED — Session 6 |
 | Impact | HIGH |
-| Candidate Value | Tier 1: CustomerID + ItemID + date range; Tier 2: CustomerHQID + ItemID + date range; Tier 3: CustomerHQID + CommodityID + date range; Tier 4: NoMatch |
+| Resolution | Contract > Commit > Open Market. Tier3 (CustomerHQID + CommodityID) is the primary matching tier. Tier1 (CustomerID + ItemID) and Tier2 (CustomerHQID + ItemID) do not fire because contracts do not carry ItemID. NoMatch is expected for HQs without a contract. |
 | Affected Scripts | `fact_sales_order_line.sql`, `fact_contract_price.sql`, `calc_fob_variance_summary.sql`, `calc_customer_performance.sql`, `exc_missing_contract_pricing.sql`, `rpt_fob_variance_detail.sql`, `rpt_customer_scorecard.sql` |
-| Pipeline Flag | `Flag_CandidateHierarchy_UNK001 = 1` on all affected rows |
-| Resolution Action | Confirm tier precedence and whether CustomerID-level match (Tier 1) always supersedes HQ-level match |
 
 ---
 
@@ -23,12 +21,10 @@ Tracks all open unknowns, unconfirmed assumptions, and candidate values across t
 
 | Field | Value |
 |---|---|
-| Status | OPEN |
+| Status | CONFIRMED — Session 6 |
 | Impact | MEDIUM |
-| Candidate Value | 24 pallets (Full), 18 pallets (Partial floor) |
+| Resolution | 24 pallets = standard truck default. Full >= 22 pallets (>= 92%). Partial >= 18 pallets (>= 75%). Underutilized < 18 pallets. Flag_CandidateThreshold_UNK002 removed. |
 | Affected Scripts | `stg_load_freight.sql`, `fact_load_freight.sql`, `calc_freight_summary.sql`, `calc_load_utilization.sql`, `rpt_freight_performance.sql` |
-| Pipeline Flag | `Flag_CandidateThreshold_UNK002 = 1` on all affected rows; `CandidateTargetPallets_UNK002 = 24` stored in `Calc_LoadUtilization` output |
-| Resolution Action | Confirm pallet threshold for Full and Partial bands with freight operations; update candidate values in staging and remove flag columns |
 
 ---
 
@@ -54,7 +50,7 @@ Tracks all open unknowns, unconfirmed assumptions, and candidate values across t
 | Candidate Value | Fiscal year start = October 1 (FY = calendar year + 1 when month >= 10) |
 | Affected Scripts | `dim_date.sql` — FiscalYear, FiscalQuarter, FiscalPeriod fields |
 | Pipeline Flag | `Flag_CandidateFiscalCalendar = 1` on all rows in `Dim_Date` |
-| Resolution Action | Confirm fiscal year start month; update `dim_date.sql` MOD expression for FiscalPeriod and CASE for FiscalYear/FiscalQuarter |
+| Resolution Action | Confirm fiscal year start month; update MOD expression for FiscalPeriod and CASE for FiscalYear/FiscalQuarter |
 
 ---
 
@@ -84,82 +80,52 @@ Tracks all open unknowns, unconfirmed assumptions, and candidate values across t
 
 | Field | Value |
 |---|---|
-| Status | OPEN |
+| Status | CONFIRMED — Session 6 |
 | Impact | HIGH |
-| Candidate Value | UNKNOWN — could represent billed amount, budgeted amount, or allocated amount |
-| Affected Scripts | `stg_load_freight.sql`, `fact_load_freight.sql`, `exc_negative_freight_margin.sql`, `rpt_freight_performance.sql` |
-| Pipeline Flag | `Flag_FreightChargedSuspect = 1` when FreightCharged IS NULL or = 0; `OpenUnknownNote` propagated to `Exc_Master` |
-| Resolution Action | Confirm whether FreightCharged represents: (a) amount billed to customer, (b) budgeted freight cost, or (c) allocated freight cost; restate affected exceptions after confirmation |
+| Resolution | FreightCharged = loadShippingCharged = total dollar amount billed to the customer for the load. It is a load-level total, not a per-case rate. FreightMargin = FreightCharged - FreightCost. |
+| Affected Scripts | `stg_load_freight.sql`, `fact_load_freight.sql`, `calc_freight_summary.sql` |
 
 ---
 
-## UNK-008 — UnitOfMeasure Controlled Value Set
+## UNK-008 — FreightCharged = 0: Valid Operational Value vs Data Gap
 
 | Field | Value |
 |---|---|
-| Status | CONFIRMED — Session 5 |
-| Impact | LOW |
-| Resolution | Allowed values confirmed as: `CASE`, `LB`, `EACH`, `BOX`, `PALLET`. `Flag_UnexpectedUOM` fires for any value outside this set. |
-| Affected Scripts | `stg_product_master.sql` |
+| Status | CONFIRMED — Session 7 |
+| Impact | HIGH |
+| Resolution | Zero is valid ONLY for PUP (FOB/Pickup) loads. Zero on DLV (Delivered) loads = missing or unrecorded freight data. Mode_of_Delivery source column confirmed: exists in line-level dataset (Raw_SalesOrderLine) with values 'DLV' and 'PUP'. Derived to load level via MAX aggregation with DLV priority. |
+| Mode Source | `Raw_SalesOrderLine.Mode_of_Delivery`. Values: `'DLV'` = Delivered, `'PUP'` = FOB/Pickup. |
+| Load-Level Derivation | DLV takes priority: if ANY line on load = 'DLV' → Mode = 'DLV'; else if ANY line = 'PUP' → Mode = 'PUP'; else NULL. |
+| Affected Scripts | `stg_load_freight.sql` v2.2.0, `stg_sales_order_line.sql` v2.1.0, `fact_load_freight.sql` v1.1.0 |
+| Flag Behavior | `Flag_FreightChargedSuspect`: PUP + zero = 0 (valid). DLV + zero = 1 (data gap). Unknown mode + zero = 1. |
+| IsCleanRow | DLV + zero/null FreightCharged = 0. PUP + zero FreightCharged = 1. |
+| FreightStatus | New column: 'Valid Zero (FOB)', 'Missing Freight (DLV)', 'Freight Charged (DLV)', 'FOB with Freight (Review)', 'Missing (Null)', 'Review'. |
+| FreightMargin | NULL for all PUP loads — customer-arranged freight; margin not measurable. |
 
 ---
 
-## UNK-009 — ContractID as Direct FK
-
-| Field | Value |
-|---|---|
-| Status | CONFIRMED — Session 5 |
-| Impact | LOW |
-| Resolution | ContractID on Stg_SalesOrderLine is a pass-through field only. No referential integrity check is applied at staging. Contract resolution uses the matching hierarchy (UNK-001), not ContractID. |
-| Affected Scripts | `stg_sales_order_line.sql`, `fact_sales_order_line.sql` |
-
----
-
-## UNK-010 — Freight Margin Allocation Basis
+## UNK-009 — 23 Items with Unknown Commodity Mapping
 
 | Field | Value |
 |---|---|
 | Status | OPEN |
 | Impact | MEDIUM |
-| Candidate Value | Proportional by QuantityCases per LoadID per customer |
-| Affected Scripts | `calc_customer_performance.sql`, `rpt_customer_scorecard.sql` |
-| Pipeline Flag | None — allocation method is implicit in CTE logic |
-| Resolution Action | Confirm whether freight margin allocation should use QuantityCases (current), revenue-weighted, flat per-line, or another basis; update `freight_allocation` CTE in `calc_customer_performance.sql` |
+| Candidate Value | UNKNOWN — 23 ItemIDs not matched to canonical commodity |
+| Affected Scripts | `stg_product_master.sql`, `dim_product.sql`, `fact_sales_order_line.sql` (contract matching excludes these items) |
+| Pipeline Flag | `Flag_MissingCommodityMapping = 1` |
+| Resolution Action | Run `SELECT ItemID, ItemDescription FROM Stg_ProductMaster WHERE Flag_MissingCommodityMapping = 1 ORDER BY ItemID;` and take output to Copilot for Item Master lookup. Add confirmed mappings to `data/commodity_mapping.csv`. |
+| Coverage | 310 of 333 items mapped (93.1%); 23 remain UNKNOWN |
 
----
-
-## UNK-011 — Freight Performance Tier Thresholds
-
-| Field | Value |
-|---|---|
-| Status | OPEN |
-| Impact | LOW |
-| Candidate Value | Strong: FreightMarginPct >= 0.15 AND UtilizationRate >= 0.80; Adequate: FreightMarginPct >= 0.05 AND UtilizationRate >= 0.65; At_Risk: below Adequate; Negative: FreightMarginPct < 0 |
-| Affected Scripts | `rpt_freight_performance.sql` |
-| Pipeline Flag | `Flag_CandidatePerformanceTier = 1` on all rows |
-| Resolution Action | Confirm margin and utilization thresholds for each performance tier with freight operations leadership |
-
----
-
-## UNK-012 — Customer Health Tier Thresholds
+## UNK-010 — 2,019 Loads with No Matching Sales Lines
 
 | Field | Value |
 |---|---|
 | Status | OPEN |
-| Impact | LOW |
-| Candidate Value | Healthy: TotalFOBVariance >= 0 AND NoContractMatchLines = 0; At_Risk: either condition fails; Critical: both conditions fail |
-| Affected Scripts | `rpt_customer_scorecard.sql` |
-| Pipeline Flag | `Flag_CandidateHealthTier = 1` on all rows |
-| Resolution Action | Confirm health tier definition with sales and contract management; determine whether quantitative thresholds (e.g., variance > -$X) should replace binary conditions |
-
----
-
-## Summary
-
-| Status | Count |
-|---|---|
-| OPEN | 9 (UNK-001, 002, 003, 004, 007, 010, 011, 012, and UNK-004) |
-| CONFIRMED | 4 (UNK-005, 006, 008, 009) |
-| SUPERSEDED | 0 |
-
-Resolution of UNK-001 and UNK-007 will have the highest downstream impact on pipeline correctness and should be prioritized.
+| Impact | MEDIUM |
+| Observed | 2,019 of 2,277 loads (88.7%) in Raw_LoadFreight have no matching
+             rows in Raw_SalesOrderLine on loadId |
+| Result | Mode_of_Delivery = NULL, FreightStatus = 'Missing (Null)',
+           IsCleanRow = 0 for these loads |
+| Resolution Action | Confirm with ops whether these loads represent deliveries
+                      with no line-level data in AX, cancelled loads, or a
+                      source extract coverage gap |
