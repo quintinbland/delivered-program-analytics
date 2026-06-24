@@ -3,48 +3,35 @@
 -- SCRIPT:      stg_sales_order_line.sql
 -- INPUT:       Raw_SalesOrderLine
 -- OUTPUT:      Stg_SalesOrderLine
--- DIALECT:     DuckDB (ANSI-compatible; TRY_CAST replaced with TRY_CAST where
---              supported; fallback CAST used for DuckDB compatibility)
--- VERSION:     2.0.0 — Real data mapping applied (2026-06-23)
+-- DIALECT:     DuckDB (ANSI-compatible)
+-- VERSION:     2.1.0 — Mode_of_Delivery added; FactKey/SalesOrderLineID removed (2026-06-24)
 -- =============================================================================
+-- CHANGE LOG (v2.1.0):
+--   - Mode_of_Delivery added: CAST(Mode_of_Delivery AS VARCHAR(50))
+--     Source: Raw_SalesOrderLine.Mode_of_Delivery (AX DlvMode field)
+--     Values: 'Dlv' (Delivered), 'PUP' (FOB/Pickup)
+--     Consumed by: stg_load_freight v2.2.0 mode_map CTE (reads Raw_SalesOrderLine directly)
+--     Also carried in Stg_SalesOrderLine for auditability and future mode-level reporting.
+--   - FactKey / SalesOrderLineID removed: column no longer present in fact_base.csv export.
+--     SalesOrderLineID defaulted to NULL for schema compatibility.
+--   - checkOut: source now exports as VARCHAR date string (no serial conversion needed).
+--   - A8 added: Mode_of_Delivery source value documentation.
 -- CHANGE LOG (v2.0.0):
 --   - Mapped all columns to confirmed real source columns from Copilot mapping
---   - SalesOrderID      ← FACT_Base.salesId
---   - SalesOrderLineID  ← FACT_Base.FactKey (new: line-level grain identifier)
---   - OrderDate         ← Order_Level_Query.shipDate (confirmed = DeliveryDate)
---   - ShipDate          ← FACT_Base.checkOut (CAST AS DATE)
---   - CustomerID        ← FACT_Base.shipTo
---   - CustomerHQID      ← FACT_Base.HQ_Name (replaces ShipToID)
---   - ItemID            ← FACT_Base.Product_ID
---   - QuantityCases     ← FACT_Base.qty (delivered qty only; ordered qty unavailable)
---   - ActualFOBPrice    ← BI_FactTable.FOB_Post_Adj (preferred); fallback FACT_Base.price
---   - NetLineRevenue    ← derived: ActualFOBPrice * QuantityCases
---   - LoadID            ← FACT_Base.loadId
---   - FreightCharged    ← REMOVED: moved to stg_load_freight.sql (load-level)
---   - UOM               ← hardcoded 'CASE' (pending confirmation)
---   - DivisionID        ← NULL (no direct source; future: derive from shipTo lookup)
---   - OrderType         ← CustomerProgramStatus (Contract/Commit/Open Market)
--- RESOLVED UNKNOWNS:
---   - UNK-007: FreightCharged is load-level total; moved to stg_load_freight
--- REMAINING OPEN:
---   - UNK-003: OnTargetFlag excluded; definition not confirmed
---   - QuantityOrdered has no source column; only QuantityDelivered available
---   - DivisionID has no direct source; defaulted to NULL
 -- =============================================================================
 -- ASSUMPTIONS:
 --   A1: Source grain is one row per SalesOrderID + LoadID + ItemID.
---       FactKey (SalesOrderLineID) is a line-level identifier carried for
---       auditability but is not part of the deduplication key.
 --   A2: NetLineRevenue is derived at staging as ActualFOBPrice * QuantityCases.
---       This differs from v1.0 which expected NetLineRevenue as a source column.
---   A3: checkOut column arrives as a timestamp; CAST to DATE applied.
---   A4: OrderDate = ShipDate (confirmed: no separate order date in source).
---   A5: CustomerProgramStatus (Contract/Commit/Open Market) is stored in
---       OrderType for downstream CustomerStatus dimension resolution.
---   A6: UOM is hardcoded to 'CASE' pending formal confirmation from source team.
---   A7: QuantityCases reflects delivered quantity only. Ordered quantity
---       is unavailable in this source; fulfillment rate calculations
---       must account for this limitation.
+--   A3: checkOut arrives as VARCHAR date string from Power Query export; TRY_CAST to DATE.
+--   A4: OrderDate = ShipDate (confirmed; no independent order date in source).
+--   A5: CustomerProgramStatus (Contract/Commit/Open Market) stored as OrderType.
+--   A6: UOM hardcoded to 'CASE' pending formal confirmation.
+--   A7: QuantityCases reflects delivered quantity only. Ordered qty unavailable.
+--   A8: Mode_of_Delivery source values are 'Dlv' and 'PUP'.
+--       'Dlv' = Delivered (Bonipak arranges and bills freight).
+--       'PUP' = Pickup / FOB (customer arranges freight; zero freight charge valid).
+--       stg_load_freight v2.2.0 derives load-level Mode by aggregating this column
+--       directly from Raw_SalesOrderLine using UPPER(TRIM()) for case normalization.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Stg_SalesOrderLine AS
@@ -53,14 +40,13 @@ WITH
 
 -- ---------------------------------------------------------------------------
 -- STEP 1: Raw ingest with type casting and NULL normalization
--- Source: Raw_SalesOrderLine
--- Column mapping: real source → pipeline column
 -- ---------------------------------------------------------------------------
 raw_cast AS (
     SELECT
         -- Natural key components
         CAST(salesId        AS VARCHAR(50))     AS SalesOrderID,
-        CAST(FactKey        AS VARCHAR(50))     AS SalesOrderLineID,
+        -- SalesOrderLineID: FactKey removed from source in v2.1.0; defaulted NULL
+        CAST(NULL           AS VARCHAR(50))     AS SalesOrderLineID,
         CAST(loadId         AS VARCHAR(50))     AS LoadID,
         CAST(Product_ID     AS VARCHAR(50))     AS ItemID,
 
@@ -73,16 +59,16 @@ raw_cast AS (
         CAST(CustomerProgramStatus AS VARCHAR(50)) AS OrderType,
 
         -- Dates
-        -- checkOut is a timestamp in source; cast to DATE
-        TRY_CAST(checkOut   AS DATE)            AS ShipDate,
-        -- OrderDate = ShipDate (confirmed; no independent order date in source)
-        TRY_CAST(checkOut   AS DATE)            AS OrderDate,
+        -- v2.1.1: checkOut format is M/D/YYYY H:MM from Power Query export
+        -- DuckDB strptime handles single-digit month/day with %-m/%-d on Linux
+        -- On Windows DuckDB use TRY_STRPTIME with explicit format
+        TRY_STRPTIME(checkOut, '%m/%d/%Y %H:%M')::DATE   AS ShipDate,
+        TRY_STRPTIME(checkOut, '%m/%d/%Y %H:%M')::DATE   AS OrderDate,
 
         -- Quantity (delivered only; ordered qty unavailable)
         TRY_CAST(qty        AS DECIMAL(18, 4))  AS QuantityCases,
 
         -- FOB Price: prefer FOB_Post_Adj; fallback to price
-        -- FOB_Post_Adj is the post-adjustment FOB used for variance calculations
         COALESCE(
             TRY_CAST(FOB_Post_Adj AS DECIMAL(18, 6)),
             TRY_CAST(price        AS DECIMAL(18, 6))
@@ -96,6 +82,11 @@ raw_cast AS (
 
         -- SalesChannel: not available in source; defaulted NULL
         CAST(NULL AS VARCHAR(50))               AS SalesChannel,
+
+        -- Mode of Delivery: 'Dlv' (Delivered) or 'PUP' (FOB/Pickup)
+        -- Consumed by stg_load_freight v2.2.0 via direct Raw_SalesOrderLine query.
+        -- Carried here for auditability and mode-level reporting.
+        CAST(Mode_of_Delivery AS VARCHAR(50))   AS Mode_of_Delivery,
 
         -- Batch metadata
         COALESCE(
@@ -113,15 +104,12 @@ raw_cast AS (
 
 -- ---------------------------------------------------------------------------
 -- STEP 1b: Derived measures
--- NetLineRevenue derived here since source does not provide it directly.
--- UnitPrice = ActualFOBPrice (same value; retained for schema compatibility).
 -- ---------------------------------------------------------------------------
 derived AS (
     SELECT
         r.*,
 
         -- NetLineRevenue: ActualFOBPrice * QuantityCases
-        -- NULL-safe: result is NULL if either input is NULL
         CASE
             WHEN r.ActualFOBPrice IS NOT NULL
              AND r.QuantityCases  IS NOT NULL
@@ -138,8 +126,6 @@ derived AS (
 
 -- ---------------------------------------------------------------------------
 -- STEP 2: Deduplication detection
--- Duplicate = same SalesOrderID + LoadID + ItemID appearing more than once.
--- All duplicates RETAINED and flagged; not dropped.
 -- ---------------------------------------------------------------------------
 dedup_flag AS (
     SELECT
@@ -195,7 +181,7 @@ dq_flags AS (
         CASE WHEN CustomerID IS NULL THEN 1 ELSE 0 END
                                                 AS Flag_MissingCustomerID,
 
-        -- DQ FLAG: NULL CustomerHQID (replaces ShipToID flag from v1.0)
+        -- DQ FLAG: NULL CustomerHQID
         CASE WHEN CustomerHQID IS NULL THEN 1 ELSE 0 END
                                                 AS Flag_MissingCustomerHQID,
 
@@ -211,7 +197,7 @@ dq_flags AS (
         CASE WHEN ActualFOBPrice IS NULL THEN 1 ELSE 0 END
                                                 AS Flag_MissingFOBPrice,
 
-        -- DQ FLAG: NULL NetLineRevenue (derived; NULL means FOB or qty was missing)
+        -- DQ FLAG: NULL NetLineRevenue
         CASE WHEN NetLineRevenue IS NULL THEN 1 ELSE 0 END
                                                 AS Flag_MissingRevenue,
 
@@ -226,7 +212,7 @@ dq_flags AS (
             ELSE 0
         END                                     AS Flag_InvalidProgramStatus,
 
-        -- COMPOSITE: Row is clean (all critical DQ flags = 0)
+        -- COMPOSITE: Row is clean
         CASE
             WHEN QuantityCases   IS NULL  THEN 0
             WHEN QuantityCases   <= 0     THEN 0
@@ -255,11 +241,11 @@ SELECT
     LoadID,
     ItemID,
 
-    -- Dimension FKs (unresolved; resolution in dimension build layer)
+    -- Dimension FKs
     CustomerID,
     CustomerHQID,
 
-    -- Dates (typed)
+    -- Dates
     ShipDate,
     OrderDate,
 
@@ -274,8 +260,9 @@ SELECT
     -- Operational attributes
     UOM,
     ContractID,
-    OrderType,          -- Contains CustomerProgramStatus values
+    OrderType,
     SalesChannel,
+    Mode_of_Delivery,
 
     -- Deduplication metadata
     DeduplicationRank,
@@ -309,21 +296,11 @@ FROM dq_flags;
 -- Row count by clean/dirty status
 -- SELECT IsCleanRow, COUNT(*) AS RowCount FROM Stg_SalesOrderLine GROUP BY IsCleanRow;
 
+-- Mode_of_Delivery distribution
+-- SELECT Mode_of_Delivery, COUNT(*) AS RowCount FROM Stg_SalesOrderLine GROUP BY Mode_of_Delivery;
+
 -- CustomerProgramStatus distribution
 -- SELECT OrderType, COUNT(*) AS RowCount FROM Stg_SalesOrderLine GROUP BY OrderType;
 
--- Flag summary
--- SELECT
---     SUM(Flag_DuplicateKey)          AS Cnt_DuplicateKey,
---     SUM(Flag_InvalidQuantity)       AS Cnt_InvalidQuantity,
---     SUM(Flag_MissingLoadID)         AS Cnt_MissingLoadID,
---     SUM(Flag_MissingCustomerID)     AS Cnt_MissingCustomerID,
---     SUM(Flag_MissingCustomerHQID)   AS Cnt_MissingCustomerHQID,
---     SUM(Flag_MissingItemID)         AS Cnt_MissingItemID,
---     SUM(Flag_MissingShipDate)       AS Cnt_MissingShipDate,
---     SUM(Flag_MissingFOBPrice)       AS Cnt_MissingFOBPrice,
---     SUM(Flag_InvalidProgramStatus)  AS Cnt_InvalidProgramStatus
--- FROM Stg_SalesOrderLine;
-
--- NetLineRevenue reconciliation: sum must be positive
+-- NetLineRevenue reconciliation
 -- SELECT SUM(NetLineRevenue) AS TotalRevenue FROM Stg_SalesOrderLine WHERE IsCleanRow = 1;
