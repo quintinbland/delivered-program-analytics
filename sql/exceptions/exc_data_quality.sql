@@ -139,28 +139,11 @@ SELECT
     cp.BatchID,
     CURRENT_TIMESTAMP
 FROM Stg_ContractPricing cp
-WHERE cp.Flag_DuplicateKey = 1
+WHERE cp.Flag_DuplicateKey = 1;
 
-UNION ALL
-
--- ---------------------------------------------------------------------------
--- RULE: INVERTED_CONTRACT_DATE
--- ---------------------------------------------------------------------------
-SELECT
-    'INVERTED_CONTRACT_DATE',
-    'HIGH',
-    'EffectiveDate is greater than ExpirationDate — contract rule is unusable for matching.',
-    cp.ContractPriceKey,
-    'ContractPricing',
-    CONCAT(cp.ContractPriceKey, ' | Eff:', CAST(cp.EffectiveDate AS VARCHAR), ' Exp:', CAST(cp.ExpirationDate AS VARCHAR)),
-    NULL,
-    NULL,
-    'Stg_ContractPricing',
-    cp.SourceSystem,
-    cp.BatchID,
-    CURRENT_TIMESTAMP
-FROM Stg_ContractPricing cp
-WHERE cp.Flag_InvertedDateRange = 1;
+-- INVERTED_CONTRACT_DATE rule removed v2.1.0 (2026-06-24):
+-- EffectiveDate/ExpirationDate are open-ended defaults (1900-01-01 to 9999-12-31).
+-- Inverted date range is structurally impossible with real data. Rule retired.
 
 -- =============================================================================
 -- POST-LOAD VALIDATION

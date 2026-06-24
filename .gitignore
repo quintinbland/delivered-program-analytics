@@ -25,3 +25,6 @@ Thumbs.db
 *.env
 secrets.json
 connection_strings.txt
+*.duckdb 
+*.d 
+pipeline_run.log 

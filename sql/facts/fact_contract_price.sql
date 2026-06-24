@@ -5,8 +5,7 @@
 -- OUTPUT:      Fact_ContractPrice
 -- DIALECT:     DuckDB (patched from Snowflake original — STRFTIME applied)
 -- PATCHED:      TO_CHAR date key expressions replaced with STRFTIME
--- VERSION:      1.0.1
--- VERSION:     1.0.0
+-- VERSION:     1.0.3 — Flag_InvertedDateRange removed; open-ended dates make check obsolete (2026-06-24)
 -- DEPENDENCIES:
 --   Stg_ContractPricing  (Module 1)
 --   Dim_Customer         (Module 2)
@@ -54,7 +53,6 @@ source AS (
     FROM Stg_ContractPricing
     WHERE DeduplicationRank = 1
       AND IsCleanRow = 1
-      AND Flag_InvertedDateRange = 0
       -- Include active + future; expired excluded from live fact
       AND ContractDateStatus IN ('Active', 'Future')
 ),
