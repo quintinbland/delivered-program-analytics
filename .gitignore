@@ -28,3 +28,4 @@ connection_strings.txt
 *.duckdb 
 *.d 
 pipeline_run.log 
+SESSION_HANDOFF.md 
