@@ -1,54 +1,77 @@
 -- =============================================================================
 -- IMPLEMENTATION: Phase 1 — Raw Table Creation
 -- TARGET:         DuckDB
--- PURPOSE:        Create all 7 raw landing tables before data load
--- RUN:            Execute once before Phase 2 data load
+-- PURPOSE:        Create all raw landing tables using real source column names
+-- VERSION:        2.0.0 — Real data column names (2026-06-23)
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Raw_SalesOrderLine (
-    SalesOrderID            VARCHAR,
-    LoadID                  VARCHAR,
-    ItemID                  VARCHAR,
-    CustomerID              VARCHAR,
-    ShipToID                VARCHAR,
-    ShipDate                VARCHAR,
-    OrderDate               VARCHAR,
-    QuantityCases           VARCHAR,
-    NetLineRevenue          VARCHAR,
-    UnitPrice               VARCHAR,
-    ContractID              VARCHAR,
-    OrderType               VARCHAR,
-    SalesChannel            VARCHAR,
+    salesId                 VARCHAR,
+    FactKey                 VARCHAR,
+    loadId                  VARCHAR,
+    shipTo                  VARCHAR,
+    HQ_Name                 VARCHAR,
+    CustomerProgramStatus   VARCHAR,
+    Product_ID              VARCHAR,
+    checkOut                VARCHAR,
+    qty                     DECIMAL(18,4),
+    FOB_Post_Adj            DECIMAL(18,6),
+    price                   DECIMAL(18,6),
     SourceSystem            VARCHAR,
     BatchID                 VARCHAR
 );
 
 CREATE OR REPLACE TABLE Raw_LoadFreight (
-    LoadID                  VARCHAR,
-    CarrierID               VARCHAR,
-    LoadDate                VARCHAR,
-    DeliveryDate            VARCHAR,
-    FreightCharged          VARCHAR,
-    FreightPaid             VARCHAR,
-    LoadPallets             VARCHAR,
-    LoadWeight              VARCHAR,
-    OriginWarehouse         VARCHAR,
-    ShipToID                VARCHAR,
+    loadId                  VARCHAR,
+    carrierName             VARCHAR,
+    warehouse               VARCHAR,
+    shipDate                VARCHAR,
+    loadShippingCharged     DECIMAL(18,4),
+    loadShippingCost        DECIMAL(18,4),
+    loadPallets             DECIMAL(10,2),
     SourceSystem            VARCHAR,
     BatchID                 VARCHAR
 );
 
 CREATE OR REPLACE TABLE Raw_ContractPricing (
-    ContractPriceKey        VARCHAR,
+    Customer_HQ             VARCHAR,
+    Commodity               VARCHAR,
+    Contract_FOB            DECIMAL(18,6),
+    CustomerProgramStatus   VARCHAR,
+    SourceSystem            VARCHAR,
+    BatchID                 VARCHAR
+);
+
+CREATE OR REPLACE TABLE Raw_Customer (
+    shipTo                  VARCHAR,
+    Name                    VARCHAR,
+    HQ_Name                 VARCHAR,
+    CustomerProgramStatus   VARCHAR,
+    SourceSystem            VARCHAR,
+    BatchID                 VARCHAR
+);
+
+CREATE OR REPLACE TABLE Raw_Item (
+    Product_ID              VARCHAR,
+    Commodity_Name          VARCHAR,
+    Product_Name            VARCHAR,
+    SourceSystem            VARCHAR,
+    BatchID                 VARCHAR
+);
+
+-- Retain stub tables referenced by dimension scripts
+-- These will be empty with real data but prevent dimension scripts from erroring
+CREATE OR REPLACE TABLE Raw_CustomerReference (
     CustomerID              VARCHAR,
     CustomerHQID            VARCHAR,
-    ItemID                  VARCHAR,
-    CommodityID             VARCHAR,
-    ContractFOBPrice        VARCHAR,
-    EffectiveDate           VARCHAR,
-    ExpirationDate          VARCHAR,
-    ContractType            VARCHAR,
-    ContractStatus          VARCHAR,
+    CustomerName            VARCHAR,
+    CustomerHQName          VARCHAR,
+    CustomerStatusKey       VARCHAR,
+    CustomerStatus          VARCHAR,
+    CustomerRegion          VARCHAR,
+    CustomerSegment         VARCHAR,
+    SalesRepID              VARCHAR,
+    ActiveFlag              VARCHAR,
     SourceSystem            VARCHAR,
     BatchID                 VARCHAR
 );
@@ -67,33 +90,12 @@ CREATE OR REPLACE TABLE Raw_ProductMaster (
     BatchID                 VARCHAR
 );
 
-CREATE OR REPLACE TABLE Raw_CustomerReference (
-    CustomerID              VARCHAR,
-    CustomerHQID            VARCHAR,
-    CustomerName            VARCHAR,
-    CustomerHQName          VARCHAR,
-    CustomerStatusKey       VARCHAR,
-    CustomerStatus          VARCHAR,
-    CustomerRegion          VARCHAR,
-    CustomerSegment         VARCHAR,
-    SalesRepID              VARCHAR,
-    ActiveFlag              VARCHAR,
-    SourceSystem            VARCHAR,
-    BatchID                 VARCHAR
-);
-
 CREATE OR REPLACE TABLE Raw_ShipToReference (
     ShipToID                VARCHAR,
     CustomerID              VARCHAR,
     ShipToName              VARCHAR,
-    AddressLine1            VARCHAR,
-    AddressLine2            VARCHAR,
     City                    VARCHAR,
     StateProvince           VARCHAR,
-    ZipPostalCode           VARCHAR,
-    Country                 VARCHAR,
-    Region                  VARCHAR,
-    DeliveryDayOfWeek       VARCHAR,
     ActiveFlag              VARCHAR,
     SourceSystem            VARCHAR,
     BatchID                 VARCHAR
@@ -109,8 +111,7 @@ CREATE OR REPLACE TABLE Raw_CommodityReference (
 );
 
 -- =============================================================================
--- VALIDATION: Run after execution
--- Expected: 7 rows, one per table, RowCount = 0 (empty — data not loaded yet)
+-- VALIDATION
 -- =============================================================================
 SELECT table_name, estimated_size AS RowCount
 FROM duckdb_tables()

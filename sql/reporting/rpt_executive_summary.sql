@@ -58,10 +58,10 @@ freight_period AS (
         CalendarYear,
         CalendarMonth,
         SUM(TotalFreightCharged)                        AS TotalFreightCharged,
-        SUM(TotalFreightPaid)                           AS TotalFreightPaid,
+        SUM(TotalFreightCost)                           AS TotalFreightCost,
         SUM(TotalFreightMargin)                         AS TotalFreightMargin,
         SUM(Count_NegativeMarginLoads)                  AS Count_NegativeMarginLoads,
-        MAX(Flag_CandidateThreshold_UNK002)             AS Flag_CandidateThreshold_UNK002
+        24                                                  AS TargetPallets
     FROM Calc_FreightSummary
     GROUP BY CalendarYear, CalendarMonth
 ),
@@ -101,7 +101,7 @@ combined AS (
 
         -- Freight
         f.TotalFreightCharged,
-        f.TotalFreightPaid,
+        f.TotalFreightCost,
         f.TotalFreightMargin,
         CASE
             WHEN f.TotalFreightCharged > 0
@@ -129,7 +129,7 @@ combined AS (
 
         -- Candidate flags
         s.Flag_CandidateHierarchy_UNK001,
-        f.Flag_CandidateThreshold_UNK002
+        f.TargetPallets
 
     FROM sales_period s
     LEFT JOIN freight_period f
@@ -180,7 +180,7 @@ SELECT
 
     -- Freight
     TotalFreightCharged,
-    TotalFreightPaid,
+    TotalFreightCost,
     TotalFreightMargin,
     FreightMarginPct,
     Prior_TotalFreightMargin,
@@ -205,7 +205,7 @@ SELECT
 
     -- Candidate flags
     Flag_CandidateHierarchy_UNK001,
-    Flag_CandidateThreshold_UNK002,
+    TargetPallets,
 
     CURRENT_TIMESTAMP                                   AS ReportLoadedAt
 

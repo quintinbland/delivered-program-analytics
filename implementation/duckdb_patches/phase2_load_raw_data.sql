@@ -1,115 +1,124 @@
 -- =============================================================================
--- IMPLEMENTATION: Phase 2 — Synthetic Data Load
+-- IMPLEMENTATION: Phase 2 — Real Data Load
 -- TARGET:         DuckDB
--- PURPOSE:        Load CSV exports from synthetic dataset into raw tables
--- RUN:            After Phase 1 (raw tables created) and after CSVs exported
+-- PURPOSE:        Load real source CSVs into raw tables
+-- VERSION:        2.0.0 — Replaces synthetic data load (2026-06-23)
 -- =============================================================================
--- ASSUMPTIONS:
---   A1: CSVs exported from DeliveredProgram_DummyDataset.xlsx
---   A2: All CSV files saved to the data/load/ folder in the repo
---   A3: CSV column headers match Raw table column names exactly
---   A4: File path below uses Windows path format — update if directory differs
--- =============================================================================
--- INSTRUCTION: Update the base path on the line below to match your system.
--- Current default: relative path assumes DuckDB is launched from repo root.
--- If running from a different directory, use an absolute path instead.
--- Example absolute path: 'C:/Users/Quintin.Bland/Documents/delivered-program-analytics-repo/data/load/'
+-- PREREQUISITES:
+--   data\real\fact_base.csv
+--   data\real\order_level_query.csv
+--   data\real\contract_unified.csv
 -- =============================================================================
 
--- ---------------------------------------------------------------------------
--- STEP 1: Load Raw_SalesOrderLine
--- ---------------------------------------------------------------------------
+-- Truncate before reload (idempotent)
 DELETE FROM Raw_SalesOrderLine;
-
-COPY Raw_SalesOrderLine FROM 'data/load/raw_sales_order_line.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
-
--- ---------------------------------------------------------------------------
--- STEP 2: Load Raw_LoadFreight
--- ---------------------------------------------------------------------------
 DELETE FROM Raw_LoadFreight;
-
-COPY Raw_LoadFreight FROM 'data/load/raw_load_freight.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
-
--- ---------------------------------------------------------------------------
--- STEP 3: Load Raw_ContractPricing
--- ---------------------------------------------------------------------------
 DELETE FROM Raw_ContractPricing;
-
-COPY Raw_ContractPricing FROM 'data/load/raw_contract_pricing.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
+DELETE FROM Raw_Customer;
+DELETE FROM Raw_Item;
 
 -- ---------------------------------------------------------------------------
--- STEP 4: Load Raw_ProductMaster
+-- 1. Raw_SalesOrderLine  ←  fact_base.csv
 -- ---------------------------------------------------------------------------
-DELETE FROM Raw_ProductMaster;
-
-COPY Raw_ProductMaster FROM 'data/load/raw_product_master.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
-
--- ---------------------------------------------------------------------------
--- STEP 5: Load Raw_CustomerReference
--- ---------------------------------------------------------------------------
-DELETE FROM Raw_CustomerReference;
-
-COPY Raw_CustomerReference FROM 'data/load/raw_customer_reference.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
-
--- ---------------------------------------------------------------------------
--- STEP 6: Load Raw_ShipToReference
--- ---------------------------------------------------------------------------
-DELETE FROM Raw_ShipToReference;
-
-COPY Raw_ShipToReference FROM 'data/load/raw_shipto_reference.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
+INSERT INTO Raw_SalesOrderLine
+SELECT
+    CAST(salesId    AS VARCHAR)                         AS salesId,
+    CAST(FactKey    AS VARCHAR)                         AS FactKey,
+    CAST(loadId     AS VARCHAR)                         AS loadId,
+    CAST(shipTo     AS VARCHAR)                         AS shipTo,
+    CAST("HQ Name"  AS VARCHAR)                         AS HQ_Name,
+    CAST(Status     AS VARCHAR)                         AS CustomerProgramStatus,
+    CAST(itemId     AS VARCHAR)                         AS Product_ID,
+    -- checkOut is Excel serial date (double) → convert to DATE string
+    CAST(
+        DATE '1899-12-30' + CAST(CAST(checkOut AS BIGINT) AS INTEGER) * INTERVAL '1' DAY
+        AS VARCHAR
+    )                                                   AS checkOut,
+    CAST(qty        AS DECIMAL(18,4))                   AS qty,
+    COALESCE(
+        CAST(FOB_Post_Adj AS DECIMAL(18,6)),
+        CAST(price        AS DECIMAL(18,6))
+    )                                                   AS FOB_Post_Adj,
+    CAST(price      AS DECIMAL(18,6))                   AS price,
+    'FACT_BASE'                                         AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)                  AS BatchID
+FROM read_csv_auto('data/real/fact_base.csv', header=true);
 
 -- ---------------------------------------------------------------------------
--- STEP 7: Load Raw_CommodityReference
+-- 2. Raw_LoadFreight  ←  order_level_query.csv
 -- ---------------------------------------------------------------------------
-DELETE FROM Raw_CommodityReference;
+INSERT INTO Raw_LoadFreight
+SELECT
+    CAST(loadId     AS VARCHAR)                         AS loadId,
+    CAST(carrierName AS VARCHAR)                        AS carrierName,
+    CAST(warehouse  AS VARCHAR)                         AS warehouse,
+    CAST(shipDate   AS VARCHAR)                         AS shipDate,
+    TRY_CAST(
+        REGEXP_REPLACE(CAST(loadShippingCharged AS VARCHAR), '[^0-9.]', '', 'g')
+        AS DECIMAL(18,4)
+    )                                                   AS loadShippingCharged,
+    TRY_CAST(
+        REGEXP_REPLACE(CAST(loadShippingCost AS VARCHAR), '[^0-9.]', '', 'g')
+        AS DECIMAL(18,4)
+    )                                                   AS loadShippingCost,
+    CAST(loadPallets AS DECIMAL(10,2))                  AS loadPallets,
+    'ORDER_LEVEL_QUERY'                                 AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)                  AS BatchID
+FROM read_csv_auto('data/real/order_level_query.csv', header=true);
 
-COPY Raw_CommodityReference FROM 'data/load/raw_commodity_reference.csv' (
-    HEADER TRUE,
-    DELIMITER ',',
-    QUOTE '"',
-    NULL ''
-);
+-- ---------------------------------------------------------------------------
+-- 3. Raw_ContractPricing  ←  contract_unified.csv
+-- ---------------------------------------------------------------------------
+INSERT INTO Raw_ContractPricing
+SELECT
+    CAST(Customer_HQ AS VARCHAR)                        AS Customer_HQ,
+    CAST(Commodity   AS VARCHAR)                        AS Commodity,
+    TRY_CAST(
+        REGEXP_REPLACE(CAST(Contract_FOB AS VARCHAR), '[^0-9.]', '', 'g')
+        AS DECIMAL(18,6)
+    )                                                   AS Contract_FOB,
+    CAST(CustomerProgramStatus AS VARCHAR)              AS CustomerProgramStatus,
+    'CONTRACT_UNIFIED'                                  AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)                  AS BatchID
+FROM read_csv_auto('data/real/contract_unified.csv', header=true);
+
+-- ---------------------------------------------------------------------------
+-- 4. Raw_Customer  ←  fact_base.csv (distinct accounts)
+-- ---------------------------------------------------------------------------
+INSERT INTO Raw_Customer
+SELECT DISTINCT
+    CAST(shipTo    AS VARCHAR)                          AS shipTo,
+    CAST(Name      AS VARCHAR)                          AS Name,
+    CAST("HQ Name" AS VARCHAR)                          AS HQ_Name,
+    CAST(Status    AS VARCHAR)                          AS CustomerProgramStatus,
+    'FACT_BASE'                                         AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)                  AS BatchID
+FROM read_csv_auto('data/real/fact_base.csv', header=true)
+WHERE shipTo IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- 5. Raw_Item  ←  fact_base.csv (distinct items)
+-- ---------------------------------------------------------------------------
+INSERT INTO Raw_Item
+SELECT DISTINCT
+    CAST(itemId          AS VARCHAR)                    AS Product_ID,
+    CAST("Commodity Name" AS VARCHAR)                   AS Commodity_Name,
+    CAST("Product Name"  AS VARCHAR)                    AS Product_Name,
+    'FACT_BASE'                                         AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)                  AS BatchID
+FROM read_csv_auto('data/real/fact_base.csv', header=true)
+WHERE itemId IS NOT NULL;
 
 -- =============================================================================
--- VALIDATION: Run after all loads complete
--- Record row counts — these are the pipeline reconciliation baseline
+-- VALIDATION: Row counts per raw table
 -- =============================================================================
-SELECT 'Raw_SalesOrderLine'    AS TableName, COUNT(*) AS RowCount FROM Raw_SalesOrderLine    UNION ALL
-SELECT 'Raw_LoadFreight',                    COUNT(*)             FROM Raw_LoadFreight        UNION ALL
-SELECT 'Raw_ContractPricing',               COUNT(*)             FROM Raw_ContractPricing    UNION ALL
-SELECT 'Raw_ProductMaster',                 COUNT(*)             FROM Raw_ProductMaster      UNION ALL
-SELECT 'Raw_CustomerReference',             COUNT(*)             FROM Raw_CustomerReference  UNION ALL
-SELECT 'Raw_ShipToReference',               COUNT(*)             FROM Raw_ShipToReference    UNION ALL
-SELECT 'Raw_CommodityReference',            COUNT(*)             FROM Raw_CommodityReference
+SELECT 'Raw_SalesOrderLine'  AS TableName, COUNT(*) AS RowCount FROM Raw_SalesOrderLine
+UNION ALL
+SELECT 'Raw_LoadFreight',     COUNT(*) FROM Raw_LoadFreight
+UNION ALL
+SELECT 'Raw_ContractPricing', COUNT(*) FROM Raw_ContractPricing
+UNION ALL
+SELECT 'Raw_Customer',        COUNT(*) FROM Raw_Customer
+UNION ALL
+SELECT 'Raw_Item',            COUNT(*) FROM Raw_Item
 ORDER BY TableName;
--- EXPECTED: All 7 rows return RowCount > 0

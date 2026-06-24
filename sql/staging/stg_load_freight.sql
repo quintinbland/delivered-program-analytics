@@ -3,26 +3,46 @@
 -- SCRIPT:      stg_load_freight.sql
 -- INPUT:       Raw_LoadFreight
 -- OUTPUT:      Stg_LoadFreight
--- DIALECT:     ANSI SQL (T-SQL / Snowflake compatible; dialect notes inline)
--- VERSION:     1.0.0
+-- DIALECT:     DuckDB (ANSI-compatible)
+-- VERSION:     2.0.0 — Real data mapping applied (2026-06-23)
+-- =============================================================================
+-- CHANGE LOG (v2.0.0):
+--   - Mapped all columns to confirmed real source columns from Copilot mapping
+--   - LoadID             ← Order_Level_Query.loadId
+--   - CarrierID          ← Order_Level_Query.carrierName
+--   - LoadDate           ← Order_Level_Query.shipDate
+--   - LoadPallets        ← Order_Level_Query.loadPallets
+--   - FreightCost        ← Order_Level_Query.loadShippingCost (internal cost)
+--   - FreightCharged     ← Order_Level_Query.loadShippingCharged (billed to customer)
+--                          MOVED HERE from stg_sales_order_line (load-level total)
+--   - MaxPalletCapacity  ← hardcoded 24 (confirmed default; no source column)
+--   - ShipToID           ← removed (not available at load level in real source)
+-- RESOLVED UNKNOWNS:
+--   - UNK-007: FreightCharged confirmed as load-level total dollar amount billed
+--              to customer. Per-case rate is NOT the correct interpretation.
+--              FreightCharged now lives exclusively at load grain.
+--   - UNK-002: MaxPalletCapacity = 24 confirmed as standard truck default.
+--              Flag_CandidateThreshold_UNK002 REMOVED — threshold now confirmed.
+-- REMAINING OPEN:
+--   - DeliveryDate: not available in Order_Level_Query; defaulted NULL
+--   - LoadWeight: not available in real source; defaulted NULL
+--   - OriginWarehouse: Order_Level_Query.warehouse confirmed as source;
+--                      included pending DivisionID confirmation
 -- =============================================================================
 -- ASSUMPTIONS:
 --   A1: Source grain is one row per LoadID. Duplicate LoadIDs in source
 --       are a data quality issue — flagged, not silently deduplicated.
---   A2: FreightCharged semantics are UNKNOWN (UNK-007). The field is
---       staged as-is. A flag is applied when FreightCharged = 0 or NULL.
---       Downstream logic must apply confirmed semantics before use.
---   A3: LoadDate arrives as a character string; format assumed YYYY-MM-DD.
---   A4: CarrierID is passed through unresolved. Resolution to Dim_Carrier
---       occurs in the dimension build layer.
---   A5: LoadPallets = 0 is flagged as suspect but retained.
---   A6: TargetFullTruckloadPallets threshold = 24 (CANDIDATE — UNK-002).
---       LoadUtilizationBand is derived at staging using this candidate value.
---       Flag_CandidateThreshold = 1 is applied to every row to signal that
---       the band assignment must be re-evaluated once UNK-002 is confirmed.
--- OPEN UNKNOWNS AFFECTING THIS SCRIPT:
---   UNK-002: TargetFullTruckloadPallets — candidate value 24 used.
---   UNK-007: FreightCharged semantics — field passed through uninterpreted.
+--   A2: FreightCharged = Order_Level_Query.loadShippingCharged.
+--       This is the total dollar amount billed to the customer for the load.
+--       It is NOT a per-case rate. FreightMargin = FreightCharged - FreightCost.
+--   A3: FreightCost = Order_Level_Query.loadShippingCost.
+--       This is the internal cost paid to the carrier.
+--   A4: MaxPalletCapacity = 24 (confirmed standard truck default).
+--       LoadUtilizationPct = LoadPallets / 24.
+--       LoadUtilizationBand derived from this ratio.
+--   A5: CarrierID populated from carrierName (string identifier, not integer key).
+--       Dim_Carrier resolution uses carrierName as the natural key.
+--   A6: LoadDate = Order_Level_Query.shipDate (same as DeliveryDate on line level).
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Stg_LoadFreight AS
@@ -31,35 +51,45 @@ WITH
 
 -- ---------------------------------------------------------------------------
 -- STEP 1: Raw ingest with type casting and NULL normalization
+-- Source: Raw_LoadFreight (Order Level Query)
 -- ---------------------------------------------------------------------------
 raw_cast AS (
     SELECT
         -- Natural key
-        CAST(LoadID          AS VARCHAR(50))   AS LoadID,
+        CAST(loadId         AS VARCHAR(50))     AS LoadID,
 
-        -- Carrier dimension FK (unresolved)
-        CAST(CarrierID       AS VARCHAR(50))   AS CarrierID,
+        -- Carrier (carrierName is the natural key for Dim_Carrier)
+        CAST(carrierName    AS VARCHAR(200))    AS CarrierID,
+
+        -- Origin warehouse (used for DivisionID derivation if confirmed)
+        CAST(warehouse      AS VARCHAR(50))     AS OriginWarehouse,
 
         -- Dates
-        TRY_CAST(LoadDate    AS DATE)          AS LoadDate,
-        TRY_CAST(DeliveryDate AS DATE)         AS DeliveryDate,
+        TRY_CAST(shipDate   AS DATE)            AS LoadDate,
+        -- DeliveryDate not available in Order Level Query source
+        CAST(NULL AS DATE)                      AS DeliveryDate,
 
         -- Freight financials
-        TRY_CAST(FreightCharged  AS DECIMAL(18, 4))  AS FreightCharged,
-        TRY_CAST(FreightPaid     AS DECIMAL(18, 4))  AS FreightPaid,
+        -- FreightCharged: total amount billed to customer for this load (UNK-007 RESOLVED)
+        TRY_CAST(loadShippingCharged AS DECIMAL(18, 4)) AS FreightCharged,
+        -- FreightCost: internal cost paid to carrier
+        TRY_CAST(loadShippingCost    AS DECIMAL(18, 4)) AS FreightCost,
 
         -- Load physical metrics
-        TRY_CAST(LoadPallets     AS DECIMAL(10, 2))  AS LoadPallets,
-        TRY_CAST(LoadWeight      AS DECIMAL(18, 4))  AS LoadWeight,
+        TRY_CAST(loadPallets AS DECIMAL(10, 2)) AS LoadPallets,
+        -- LoadWeight not available in real source
+        CAST(NULL AS DECIMAL(18, 4))            AS LoadWeight,
 
-        -- Origin/destination
-        CAST(OriginWarehouse AS VARCHAR(50))   AS OriginWarehouse,
-        CAST(ShipToID        AS VARCHAR(50))   AS ShipToID,
+        -- MaxPalletCapacity: confirmed default 24 (no source column)
+        CAST(24 AS DECIMAL(10, 2))              AS MaxPalletCapacity,
+
+        -- ShipToID not available at load level; will resolve via line-level join
+        CAST(NULL AS VARCHAR(50))               AS ShipToID,
 
         -- Batch metadata
         COALESCE(
             CAST(SourceSystem AS VARCHAR(100)),
-            'ERP_LOADFREIGHT'
+            'ORDER_LEVEL_QUERY'
         )                                       AS SourceSystem,
         COALESCE(
             CAST(BatchID AS VARCHAR(100)),
@@ -73,8 +103,6 @@ raw_cast AS (
 -- ---------------------------------------------------------------------------
 -- STEP 2: Deduplication detection
 -- Duplicate = same LoadID appearing more than once.
--- Prefer row with higher FreightCharged (more complete financial data).
--- All duplicates retained and flagged.
 -- ---------------------------------------------------------------------------
 dedup_flag AS (
     SELECT
@@ -84,12 +112,12 @@ dedup_flag AS (
             ORDER BY
                 CASE
                     WHEN FreightCharged IS NOT NULL
-                     AND FreightPaid IS NOT NULL
-                     AND LoadPallets IS NOT NULL
+                     AND FreightCost    IS NOT NULL
+                     AND LoadPallets    IS NOT NULL
                     THEN 0
                     ELSE 1
                 END ASC,
-                FreightCharged DESC,
+                FreightCharged DESC NULLS LAST,
                 StagedAt ASC
         ) AS DeduplicationRank,
         COUNT(*) OVER (
@@ -106,36 +134,45 @@ dq_flags AS (
         d.*,
 
         -- -----------
-        -- DERIVED MEASURES (calculated at staging for downstream use)
+        -- DERIVED MEASURES
         -- -----------
 
-        -- FreightMargin = FreightCharged - FreightPaid
-        -- NULL-safe: result is NULL if either input is NULL.
+        -- FreightMargin = FreightCharged - FreightCost
+        -- FreightCharged: billed to customer | FreightCost: paid to carrier
         CASE
             WHEN FreightCharged IS NOT NULL
-             AND FreightPaid    IS NOT NULL
-            THEN FreightCharged - FreightPaid
+             AND FreightCost    IS NOT NULL
+            THEN FreightCharged - FreightCost
             ELSE NULL
-        END                                         AS FreightMargin,
+        END                                     AS FreightMargin,
 
         -- FreightMarginPct = FreightMargin / FreightCharged
-        -- NULL and divide-by-zero safe.
         CASE
             WHEN FreightCharged IS NOT NULL
-             AND FreightPaid    IS NOT NULL
+             AND FreightCost    IS NOT NULL
              AND FreightCharged <> 0
-            THEN (FreightCharged - FreightPaid) / FreightCharged
+            THEN (FreightCharged - FreightCost) / FreightCharged
             ELSE NULL
-        END                                         AS FreightMarginPct,
+        END                                     AS FreightMarginPct,
 
-        -- LoadUtilizationBand — CANDIDATE thresholds (UNK-002)
-        -- Full >= 24, Partial >= 18, Underutilized < 18
+        -- LoadUtilizationPct = LoadPallets / MaxPalletCapacity (confirmed: 24)
+        CASE
+            WHEN LoadPallets IS NOT NULL
+             AND MaxPalletCapacity > 0
+            THEN LoadPallets / MaxPalletCapacity
+            ELSE NULL
+        END                                     AS LoadUtilizationPct,
+
+        -- LoadUtilizationBand — thresholds confirmed (MaxPalletCapacity = 24)
+        -- Full    >= 22 pallets (>= 92% utilization)
+        -- Partial >= 18 pallets (>= 75% utilization)
+        -- Underutilized < 18 pallets
         CASE
             WHEN LoadPallets IS NULL THEN 'UNKNOWN'
-            WHEN LoadPallets >= 24   THEN 'Full'
+            WHEN LoadPallets >= 22   THEN 'Full'
             WHEN LoadPallets >= 18   THEN 'Partial'
             ELSE                          'Underutilized'
-        END                                         AS LoadUtilizationBand,
+        END                                     AS LoadUtilizationBand,
 
         -- -----------
         -- DATA QUALITY FLAGS
@@ -143,65 +180,71 @@ dq_flags AS (
 
         -- DQ FLAG: Duplicate LoadID
         CASE WHEN DuplicateCount > 1 THEN 1 ELSE 0 END
-                                                    AS Flag_DuplicateLoadID,
+                                                AS Flag_DuplicateLoadID,
 
         -- DQ FLAG: NULL CarrierID
         CASE WHEN CarrierID IS NULL THEN 1 ELSE 0 END
-                                                    AS Flag_MissingCarrierID,
+                                                AS Flag_MissingCarrierID,
 
         -- DQ FLAG: NULL LoadDate
         CASE WHEN LoadDate IS NULL THEN 1 ELSE 0 END
-                                                    AS Flag_MissingLoadDate,
+                                                AS Flag_MissingLoadDate,
 
-        -- DQ FLAG: NULL or zero FreightCharged (UNK-007 — semantics unknown)
+        -- DQ FLAG: NULL or zero FreightCharged
+        -- UNK-007 RESOLVED: zero FreightCharged is now a confirmed data issue
         CASE
             WHEN FreightCharged IS NULL THEN 1
             WHEN FreightCharged = 0     THEN 1
             ELSE 0
-        END                                         AS Flag_FreightChargedSuspect,
+        END                                     AS Flag_FreightChargedSuspect,
 
-        -- DQ FLAG: NULL FreightPaid
-        CASE WHEN FreightPaid IS NULL THEN 1 ELSE 0 END
-                                                    AS Flag_MissingFreightPaid,
+        -- DQ FLAG: NULL FreightCost (was FreightPaid in v1.0)
+        CASE WHEN FreightCost IS NULL THEN 1 ELSE 0 END
+                                                AS Flag_MissingFreightCost,
 
         -- DQ FLAG: NULL or zero LoadPallets
         CASE
             WHEN LoadPallets IS NULL THEN 1
             WHEN LoadPallets = 0     THEN 1
             ELSE 0
-        END                                         AS Flag_MissingLoadPallets,
+        END                                     AS Flag_MissingLoadPallets,
+
+        -- DQ FLAG: LoadPallets exceeds MaxPalletCapacity (overfilled load)
+        CASE
+            WHEN LoadPallets IS NOT NULL
+             AND LoadPallets > 24
+            THEN 1
+            ELSE 0
+        END                                     AS Flag_OverfilledLoad,
 
         -- DQ FLAG: Negative FreightMargin
         CASE
             WHEN FreightCharged IS NOT NULL
-             AND FreightPaid    IS NOT NULL
-             AND (FreightCharged - FreightPaid) < 0
+             AND FreightCost    IS NOT NULL
+             AND (FreightCharged - FreightCost) < 0
             THEN 1
             ELSE 0
-        END                                         AS Flag_NegativeFreightMargin,
+        END                                     AS Flag_NegativeFreightMargin,
 
-        -- DQ FLAG: Underutilized load (candidate threshold — UNK-002)
+        -- DQ FLAG: Underutilized load (< 18 pallets)
         CASE
             WHEN LoadPallets IS NOT NULL
              AND LoadPallets < 18
             THEN 1
             ELSE 0
-        END                                         AS Flag_UnderutilizedLoad,
-
-        -- DQ FLAG: Candidate threshold applied — re-validate when UNK-002 confirmed
-        1                                           AS Flag_CandidateThreshold_UNK002,
+        END                                     AS Flag_UnderutilizedLoad,
 
         -- COMPOSITE: Row is clean
         CASE
-            WHEN LoadID IS NULL         THEN 0
-            WHEN CarrierID IS NULL      THEN 0
-            WHEN LoadDate IS NULL       THEN 0
+            WHEN LoadID         IS NULL THEN 0
+            WHEN CarrierID      IS NULL THEN 0
+            WHEN LoadDate       IS NULL THEN 0
             WHEN FreightCharged IS NULL THEN 0
-            WHEN FreightPaid IS NULL    THEN 0
-            WHEN LoadPallets IS NULL    THEN 0
+            WHEN FreightCost    IS NULL THEN 0
+            WHEN LoadPallets    IS NULL THEN 0
             WHEN DuplicateCount > 1     THEN 0
             ELSE 1
-        END                                         AS IsCleanRow
+        END                                     AS IsCleanRow
 
     FROM dedup_flag d
 )
@@ -224,15 +267,19 @@ SELECT
 
     -- Freight financials (raw)
     FreightCharged,
-    FreightPaid,
+    FreightCost,
 
     -- Freight financials (derived at staging)
     FreightMargin,
     FreightMarginPct,
 
-    -- Load metrics
+    -- Load metrics (raw)
     LoadPallets,
     LoadWeight,
+    MaxPalletCapacity,
+
+    -- Load metrics (derived)
+    LoadUtilizationPct,
     LoadUtilizationBand,
 
     -- Deduplication metadata
@@ -244,11 +291,11 @@ SELECT
     Flag_MissingCarrierID,
     Flag_MissingLoadDate,
     Flag_FreightChargedSuspect,
-    Flag_MissingFreightPaid,
+    Flag_MissingFreightCost,
     Flag_MissingLoadPallets,
+    Flag_OverfilledLoad,
     Flag_NegativeFreightMargin,
     Flag_UnderutilizedLoad,
-    Flag_CandidateThreshold_UNK002,
     IsCleanRow,
 
     -- Batch metadata
@@ -262,16 +309,20 @@ FROM dq_flags;
 -- POST-LOAD VALIDATION QUERIES
 -- =============================================================================
 
--- Load utilization band distribution (candidate thresholds)
--- SELECT LoadUtilizationBand, COUNT(*) AS LoadCount
--- FROM Stg_LoadFreight
--- GROUP BY LoadUtilizationBand;
+-- Load utilization band distribution
+-- SELECT LoadUtilizationBand, COUNT(*) AS LoadCount, AVG(LoadUtilizationPct) AS AvgUtil
+-- FROM Stg_LoadFreight GROUP BY LoadUtilizationBand;
 
 -- Freight margin summary
 -- SELECT
 --     SUM(Flag_NegativeFreightMargin) AS Cnt_NegativeMargin,
+--     SUM(Flag_OverfilledLoad)        AS Cnt_OverfilledLoads,
 --     AVG(FreightMarginPct)           AS Avg_MarginPct,
---     MIN(FreightMargin)              AS Min_FreightMargin,
---     MAX(FreightMargin)              AS Max_FreightMargin
--- FROM Stg_LoadFreight
--- WHERE IsCleanRow = 1;
+--     SUM(FreightCharged)             AS Total_FreightCharged,
+--     SUM(FreightCost)                AS Total_FreightCost,
+--     SUM(FreightMargin)              AS Total_FreightMargin
+-- FROM Stg_LoadFreight WHERE IsCleanRow = 1;
+
+-- Overfilled loads (exception candidates)
+-- SELECT LoadID, CarrierID, LoadPallets, MaxPalletCapacity
+-- FROM Stg_LoadFreight WHERE Flag_OverfilledLoad = 1;

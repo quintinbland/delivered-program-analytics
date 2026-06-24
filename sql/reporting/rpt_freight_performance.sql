@@ -69,7 +69,7 @@ joined AS (
 
         -- Freight financials
         f.TotalFreightCharged,
-        f.TotalFreightPaid,
+        f.TotalFreightCost,
         f.TotalFreightMargin,
         f.FreightMarginPct,
 
@@ -79,7 +79,7 @@ joined AS (
         f.Count_FreightChargedSuspect,
 
         -- Candidate flags
-        f.Flag_CandidateThreshold_UNK002
+        f.TargetPallets
 
     FROM Calc_FreightSummary f
     JOIN Dim_Carrier dc ON f.CarrierKey = dc.CarrierKey

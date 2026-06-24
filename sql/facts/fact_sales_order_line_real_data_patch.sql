@@ -1,0 +1,135 @@
+-- =============================================================================
+-- PATCH:       fact_sales_order_line_real_data_patch.sql
+-- TARGET:      sql/facts/fact_sales_order_line.sql
+-- PURPOSE:     Remove contract date range filter; real source has no contract dates.
+--              Contracts default to EffectiveDate='1900-01-01', ExpirationDate='9999-12-31'
+--              so BETWEEN will technically still work — but this patch makes intent explicit.
+-- VERSION:     1.0.0 (2026-06-23)
+-- =============================================================================
+-- ALSO DOCUMENTS: Column name changes needed in fact_sales_order_line.sql
+--   - ShipToID   → CustomerHQID  (source column renamed in stg_sales_order_line v2.0)
+--   - ShipToKey  → no longer relevant (ShipTo dimension replaced by CustomerHQ)
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- CHANGE 1: Contract tier matching — remove date range filter
+-- ---------------------------------------------------------------------------
+-- FIND this pattern in tier1, tier2, tier3 CTEs:
+--
+--   AND d.ShipDate BETWEEN cp.EffectiveDate AND cp.ExpirationDate
+--
+-- REPLACE WITH: (remove the line entirely, or replace with always-true condition)
+--
+--   -- Date range filter removed: real source contracts have no date range.
+--   -- EffectiveDate = '1900-01-01', ExpirationDate = '9999-12-31' by default.
+--   -- All contracts match all transaction dates.
+--
+-- This applies to all three tier CTEs (tier1, tier2, tier3).
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- CHANGE 2: Tier1 matching — CustomerID-level contracts do not exist in real data
+-- ---------------------------------------------------------------------------
+-- Real contracts are at CustomerHQID level only.
+-- Tier1 (CustomerID + ItemID match) will produce zero results.
+-- The tier structure still works correctly — Tier1 fires zero matches,
+-- Tier2 (HQItem) and Tier3 (HQCommodity) carry all contract matches.
+-- No code change required; document this behavioral difference here.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- CHANGE 3: ShipToKey → CustomerHQID join alignment
+-- ---------------------------------------------------------------------------
+-- stg_sales_order_line v2.0 no longer carries ShipToID.
+-- CustomerHQID is now the customer hierarchy field from HQ_Name.
+-- The Dim_ShipTo lookup in fact_sales_order_line.sql will return no matches
+-- and all rows will carry ShipToKey = -1. This is acceptable behavior —
+-- the ShipTo dimension becomes a stub until real ShipTo data is available.
+-- No code change required; document this limitation here.
+-- ---------------------------------------------------------------------------
+
+-- =============================================================================
+-- FULL UPDATED TIER CTEs (copy these into fact_sales_order_line.sql)
+-- Replaces the tier1, tier2, tier3 CTEs with date filter removed
+-- =============================================================================
+
+-- Tier 1: CustomerID + ItemID (no date range — will produce zero matches with real data)
+-- tier1 AS (
+--     SELECT
+--         d.SalesOrderID,
+--         d.LoadID,
+--         d.ItemID_Source,
+--         cp.ContractFOBPrice                             AS ContractFOBPrice,
+--         cp.ContractPriceKey                             AS ContractPriceKey,
+--         1                                               AS MatchTier,
+--         'Tier1_CustomerItem'                            AS ContractMatchTier
+--     FROM dim_resolved d
+--     JOIN Stg_ContractPricing cp
+--         ON d.CustomerID_Source  = cp.CustomerID
+--        AND d.ItemID_Source       = cp.ItemID
+--        AND cp.IsCleanRow         = 1
+-- ),
+
+-- Tier 2: CustomerHQID + ItemID (no date range — ItemID NULL in real contracts; zero matches)
+-- tier2 AS (
+--     SELECT
+--         d.SalesOrderID,
+--         d.LoadID,
+--         d.ItemID_Source,
+--         cp.ContractFOBPrice,
+--         cp.ContractPriceKey,
+--         2                                               AS MatchTier,
+--         'Tier2_HQItem'                                  AS ContractMatchTier
+--     FROM dim_resolved d
+--     JOIN Stg_ContractPricing cp
+--         ON d.CustomerHQID        = cp.CustomerHQID
+--        AND d.ItemID_Source        = cp.ItemID
+--        AND cp.IsCleanRow          = 1
+--     WHERE NOT EXISTS (
+--         SELECT 1 FROM tier1 t
+--         WHERE t.SalesOrderID = d.SalesOrderID
+--           AND t.LoadID       = d.LoadID
+--           AND t.ItemID_Source = d.ItemID_Source
+--     )
+-- ),
+
+-- Tier 3: CustomerHQID + CommodityID (PRIMARY matching tier with real data)
+-- tier3 AS (
+--     SELECT
+--         d.SalesOrderID,
+--         d.LoadID,
+--         d.ItemID_Source,
+--         cp.ContractFOBPrice,
+--         cp.ContractPriceKey,
+--         3                                               AS MatchTier,
+--         'Tier3_HQCommodity'                             AS ContractMatchTier
+--     FROM dim_resolved d
+--     JOIN Stg_ContractPricing cp
+--         ON d.CustomerHQID        = cp.CustomerHQID
+--        AND d.CommodityID         = cp.CommodityID
+--        AND cp.IsCleanRow         = 1
+--     WHERE NOT EXISTS (
+--         SELECT 1 FROM tier1 t
+--         WHERE t.SalesOrderID = d.SalesOrderID
+--           AND t.LoadID       = d.LoadID
+--           AND t.ItemID_Source = d.ItemID_Source
+--     )
+--     AND NOT EXISTS (
+--         SELECT 1 FROM tier2 t
+--         WHERE t.SalesOrderID = d.SalesOrderID
+--           AND t.LoadID       = d.LoadID
+--           AND t.ItemID_Source = d.ItemID_Source
+--     )
+-- ),
+
+-- =============================================================================
+-- EXPECTED BEHAVIOR WITH REAL DATA
+-- =============================================================================
+-- Tier1 matches: 0    (CustomerID-level contracts do not exist in real source)
+-- Tier2 matches: 0    (ItemID-level contracts do not exist in real source)
+-- Tier3 matches: most Contract and Commit customers (HQID + CommodityID)
+-- NoMatch:       all Open Market customers + any unmatched Contract/Commit rows
+--
+-- EXCEPTION FLAG: Flag_NoContractMatch = 1 for Contract/Commit customers
+-- with no Tier3 match indicates a data gap (missing contract record).
+-- =============================================================================
