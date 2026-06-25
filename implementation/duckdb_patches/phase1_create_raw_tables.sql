@@ -2,7 +2,14 @@
 -- IMPLEMENTATION: Phase 1 — Raw Table Creation
 -- TARGET:         DuckDB
 -- PURPOSE:        Create all raw landing tables using real source column names
--- VERSION:        2.1.0 — Mode_of_Delivery added; FactKey removed (2026-06-24)
+-- VERSION:        2.2.0 — Raw_NonProduceItems added (2026-06-25)
+-- =============================================================================
+-- CHANGE LOG (v2.2.0):
+--   - Raw_NonProduceItems added: reference table for non-produce ItemIDs.
+--     Loaded from data/non_produce_items.csv. Consumed by stg_product_master.sql.
+-- CHANGE LOG (v2.1.0):
+--   - Mode_of_Delivery added to Raw_SalesOrderLine DDL; FactKey removed.
+--   - Raw_CommodityMapping added.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Raw_SalesOrderLine (
@@ -111,27 +118,37 @@ CREATE OR REPLACE TABLE Raw_CommodityReference (
 );
 
 -- =============================================================================
+-- Raw_CommodityMapping — ItemID → canonical CommodityID lookup
+-- Source: data/commodity_mapping.csv (Copilot-generated, manually reviewed)
+-- Consumed by: stg_product_master.sql
+-- VERSION: v2.1.0 (2026-06-24)
+-- =============================================================================
+
+CREATE OR REPLACE TABLE Raw_CommodityMapping (
+    ItemID              VARCHAR,    -- matches Raw_ProductMaster.ItemID
+    CommodityID_Mapped  VARCHAR,    -- canonical commodity name; 'UNKNOWN' treated as NULL
+    SourceSystem        VARCHAR,
+    BatchID             VARCHAR
+);
+
+-- =============================================================================
+-- Raw_NonProduceItems — ItemIDs excluded from produce analytics
+-- Source: data/non_produce_items.csv (Copilot-reviewed, 2026-06-25)
+-- Consumed by: stg_product_master.sql via LEFT JOIN (Flag_NonProduce)
+-- VERSION: v2.2.0 (2026-06-25)
+-- =============================================================================
+
+CREATE OR REPLACE TABLE Raw_NonProduceItems (
+    ItemID          VARCHAR,    -- matches Raw_ProductMaster.ItemID
+    ExcludeReason   VARCHAR,    -- 'Non-Produce' or descriptive label
+    SourceSystem    VARCHAR,
+    BatchID         VARCHAR
+);
+
+-- =============================================================================
 -- VALIDATION
 -- =============================================================================
 SELECT table_name, estimated_size AS RowCount
 FROM duckdb_tables()
 WHERE table_name LIKE 'Raw_%'
 ORDER BY table_name;
-
--- =============================================================================
--- PATCH:   Add Raw_CommodityMapping table to phase1_create_raw_tables.sql
--- ACTION:  Append this CREATE TABLE statement to the end of
---          implementation/duckdb_patches/phase1_create_raw_tables.sql
--- VERSION: v2.1.0 (2026-06-24)
--- =============================================================================
--- Raw_CommodityMapping — ItemID → canonical CommodityID lookup
--- Source: data/commodity_mapping.csv (Copilot-generated, manually reviewed)
--- Consumed by: stg_product_master.sql (replaces NULL CommodityID from Raw_Item)
--- =============================================================================
-
-CREATE OR REPLACE TABLE Raw_CommodityMapping (
-    ItemID              VARCHAR,    -- matches Raw_Item.Product_ID / Stg_ProductMaster.ItemID
-    CommodityID_Mapped  VARCHAR,    -- canonical commodity name; 'UNKNOWN' treated as NULL
-    SourceSystem        VARCHAR,
-    BatchID             VARCHAR
-);
