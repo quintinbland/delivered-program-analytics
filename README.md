@@ -82,6 +82,12 @@ delivered-program-analytics/
         ├── rpt_freight_performance.sql
         ├── rpt_exception_dashboard.sql
         └── rpt_customer_scorecard.sql
+    ├── implementation/
+    │   └── duckdb_patches/
+    │       ├── phase1_create_raw_tables.sql  ← Raw DDL (env-specific paths)
+    │       ├── phase2_load_raw_data.sql      ← CSV load scripts (local paths)
+    │       ├── dim_date_duckdb.sql           ← STRFTIME patch (DuckDB only; swap for dim_date.sql on Snowflake)
+    │       └── phase9_reconciliation.sql    ← Reconciliation with env-specific row count baselines
 ```
 
 ---
