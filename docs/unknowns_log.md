@@ -108,24 +108,6 @@ Tracks all open unknowns, unconfirmed assumptions, and candidate values across t
 
 | Field | Value |
 |---|---|
-| Status | OPEN |
+| Status | CONFIRMED — Session 10 (2026-06-25) |
 | Impact | MEDIUM |
-| Candidate Value | UNKNOWN — 23 ItemIDs not matched to canonical commodity |
-| Affected Scripts | `stg_product_master.sql`, `dim_product.sql`, `fact_sales_order_line.sql` (contract matching excludes these items) |
-| Pipeline Flag | `Flag_MissingCommodityMapping = 1` |
-| Resolution Action | Run `SELECT ItemID, ItemDescription FROM Stg_ProductMaster WHERE Flag_MissingCommodityMapping = 1 ORDER BY ItemID;` and take output to Copilot for Item Master lookup. Add confirmed mappings to `data/commodity_mapping.csv`. |
-| Coverage | 310 of 333 items mapped (93.1%); 23 remain UNKNOWN |
-
-## UNK-010 — 2,019 Loads with No Matching Sales Lines
-
-| Field | Value |
-|---|---|
-| Status | OPEN |
-| Impact | MEDIUM |
-| Observed | 2,019 of 2,277 loads (88.7%) in Raw_LoadFreight have no matching
-             rows in Raw_SalesOrderLine on loadId |
-| Result | Mode_of_Delivery = NULL, FreightStatus = 'Missing (Null)',
-           IsCleanRow = 0 for these loads |
-| Resolution Action | Confirm with ops whether these loads represent deliveries
-                      with no line-level data in AX, cancelled loads, or a
-                      source extract coverage gap |
+| Resolution | All 23 items resolved via Copilot. 13 produce items mapped and appended to `data/commodity_mapping.csv`. 10 non-produce items added to `data/non_produce_items.csv` and excluded from produce analytics via `Raw_NonProduceItems` reference table +
