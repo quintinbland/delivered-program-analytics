@@ -1,21 +1,24 @@
 -- =============================================================================
 -- MODULE:      Staging Layer
 -- SCRIPT:      stg_product_master.sql
--- INPUT:       Raw_ProductMaster, Raw_CommodityMapping
+-- INPUT:       Raw_ProductMaster, Raw_CommodityMapping, Raw_NonProduceItems
 -- OUTPUT:      Stg_ProductMaster
 -- DIALECT:     ANSI SQL (T-SQL / Snowflake compatible; dialect notes inline)
--- VERSION:     2.0.0 — CommodityID resolved from Raw_CommodityMapping (2026-06-24)
+-- VERSION:     2.2.0 — UOM removed from IsCleanRow composite (2026-06-25)
 -- =============================================================================
+-- CHANGE LOG (v2.2.0):
+--   - UnitOfMeasure removed from IsCleanRow composite. UOM is not available
+--     from the real source (fact_base.csv via Raw_Item). Flag_UnexpectedUOM
+--     remains populated for audit visibility but no longer blocks clean rows.
+-- CHANGE LOG (v2.1.0):
+--   - Raw_NonProduceItems reference table joined in with_non_produce CTE.
+--   - Flag_NonProduce = 1 for 13 non-produce ItemIDs identified via Copilot.
+--   - IsCleanRow updated: non-produce rows excluded from clean composite.
+--   - Resolves UNK-009.
 -- CHANGE LOG (v2.0.0):
 --   - CommodityID now resolved via LEFT JOIN to Raw_CommodityMapping on ItemID.
---     Previously NULL for all rows (source item master has no commodity column).
---   - Raw_CommodityMapping.CommodityID_Mapped value 'UNKNOWN' is treated as
---     NULL — mapped items with no confirmed commodity are flagged identically
---     to unmapped items (Flag_MissingCommodityMapping = 1).
---   - CommodityID_Raw added: preserves original source value (always NULL from
---     Raw_ProductMaster) for audit. Mapping source is now Raw_CommodityMapping.
---   - Flag_MissingCommodityMapping now fires on: NULL source + no mapping,
---     NULL source + mapping exists but value is 'UNKNOWN'.
+--   - CommodityID_Raw added for audit.
+--   - Flag_MissingCommodityMapping fires on NULL or UNKNOWN mapping.
 -- =============================================================================
 -- ASSUMPTIONS:
 --   A1: Source grain is one row per ItemID. Duplicate ItemIDs are a data
@@ -25,13 +28,14 @@
 --       mapping entry or UNKNOWN mapping are flagged with
 --       Flag_MissingCommodityMapping = 1.
 --   A3: OrganicConventionalFlag semantics are UNKNOWN (not in UNK log but
---       unconfirmed as a governed vs. inferred field). The field is staged
---       as-is with a flag when NULL.
---   A4: ProductDescription is free-text; it is trimmed but not parsed.
+--       unconfirmed as a governed vs. inferred field). Staged as-is.
+--   A4: ProductDescription is free-text; trimmed but not parsed.
 --   A5: UnitOfMeasure is expected to be a controlled value (e.g., 'CASE',
---       'LB', 'EACH'). Unexpected values are flagged.
---   A6: Raw_CommodityMapping is loaded in Phase 2 before this script runs.
---       Pipeline dependency: phase2_load_raw_data.sql must precede this script.
+--       'LB', 'EACH'). Unexpected values are flagged via Flag_UnexpectedUOM
+--       but UOM is not available from the real source; it does not gate
+--       IsCleanRow.
+--   A6: Raw_CommodityMapping and Raw_NonProduceItems are loaded in Phase 2
+--       before this script runs.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Stg_ProductMaster AS
@@ -97,6 +101,22 @@ with_commodity AS (
 ),
 
 -- ---------------------------------------------------------------------------
+-- STEP 1c: Flag non-produce items via LEFT JOIN to Raw_NonProduceItems
+-- Items present in Raw_NonProduceItems are excluded from produce analytics.
+-- ---------------------------------------------------------------------------
+with_non_produce AS (
+    SELECT
+        wc.*,
+        CASE
+            WHEN np.ItemID IS NOT NULL THEN 1
+            ELSE 0
+        END                                         AS Flag_NonProduce
+    FROM with_commodity wc
+    LEFT JOIN Raw_NonProduceItems np
+        ON UPPER(TRIM(wc.ItemID)) = UPPER(TRIM(np.ItemID))
+),
+
+-- ---------------------------------------------------------------------------
 -- STEP 2: Deduplication detection
 -- Duplicate = same ItemID appearing more than once.
 -- Prefer rows with CommodityID populated.
@@ -114,7 +134,7 @@ dedup_flag AS (
         COUNT(*) OVER (
             PARTITION BY ItemID
         ) AS DuplicateCount
-    FROM with_commodity
+    FROM with_non_produce
 ),
 
 -- ---------------------------------------------------------------------------
@@ -138,6 +158,8 @@ dq_flags AS (
              THEN 1 ELSE 0 END                      AS Flag_MissingDescription,
 
         -- DQ FLAG: NULL or unexpected UnitOfMeasure
+        -- NOTE: UOM is not available from the real source; flag is for audit
+        -- visibility only and does not gate IsCleanRow.
         CASE
             WHEN UnitOfMeasure IS NULL THEN 1
             WHEN UnitOfMeasure NOT IN ('CASE', 'LB', 'EACH', 'BOX', 'PALLET') THEN 1
@@ -159,14 +181,19 @@ dq_flags AS (
             ELSE 0
         END                                         AS Flag_InactiveItem,
 
+        -- DQ FLAG: Non-produce item (excluded from produce analytics)
+        Flag_NonProduce,
+
         -- COMPOSITE: Row is clean
+        -- UnitOfMeasure excluded: not available from real source (fact_base.csv).
+        -- Flagged via Flag_UnexpectedUOM for audit but does not block clean rows.
         CASE
-            WHEN ItemID IS NULL          THEN 0
-            WHEN CommodityID IS NULL     THEN 0
-            WHEN DuplicateCount > 1      THEN 0
-            WHEN ItemDescription IS NULL THEN 0
+            WHEN ItemID IS NULL             THEN 0
+            WHEN CommodityID IS NULL        THEN 0
+            WHEN DuplicateCount > 1         THEN 0
+            WHEN ItemDescription IS NULL    THEN 0
             WHEN TRIM(ItemDescription) = '' THEN 0
-            WHEN UnitOfMeasure IS NULL   THEN 0
+            WHEN Flag_NonProduce = 1        THEN 0
             ELSE 1
         END                                         AS IsCleanRow
 
@@ -209,6 +236,7 @@ SELECT
     Flag_MissingOrganicFlag,
     Flag_MissingWeight,
     Flag_InactiveItem,
+    Flag_NonProduce,
     IsCleanRow,
 
     -- Batch metadata
@@ -222,13 +250,17 @@ FROM dq_flags;
 -- POST-LOAD VALIDATION QUERIES
 -- =============================================================================
 
--- Commodity mapping coverage (expect 0 or low UNKNOWN count after mapping)
+-- Commodity mapping coverage
 -- SELECT CommodityID, COUNT(*) AS ItemCount, SUM(Flag_MissingCommodityMapping) AS UnmappedCount
 -- FROM Stg_ProductMaster GROUP BY CommodityID ORDER BY ItemCount DESC;
 
--- Items still missing commodity mapping after join (take to Copilot for resolution)
+-- Items still missing commodity mapping after join
 -- SELECT ItemID, ItemDescription, ItemCategory
 -- FROM Stg_ProductMaster WHERE Flag_MissingCommodityMapping = 1 ORDER BY ItemID;
+
+-- Non-produce items flagged
+-- SELECT ItemID, ItemDescription, Flag_NonProduce
+-- FROM Stg_ProductMaster WHERE Flag_NonProduce = 1 ORDER BY ItemID;
 
 -- UOM distribution
 -- SELECT UnitOfMeasure, COUNT(*) AS ItemCount
