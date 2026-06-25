@@ -2,17 +2,18 @@
 -- IMPLEMENTATION: Phase 2 — Real Data Load
 -- TARGET:         DuckDB
 -- PURPOSE:        Load real source CSVs into raw tables
--- VERSION:        2.4.0 — Updated column mapping for new fact_base.csv export (2026-06-24)
+-- VERSION:        2.5.0 — Raw_NonProduceItems load added (2026-06-25)
 -- =============================================================================
+-- CHANGE LOG (v2.5.0):
+--   - Raw_NonProduceItems load added from data/non_produce_items.csv.
+--     13 non-produce ItemIDs identified via Copilot (UNK-009 resolution).
 -- CHANGE LOG (v2.4.0):
 --   - Raw_SalesOrderLine: removed FactKey (not in new export)
 --   - Raw_SalesOrderLine: HQ Name → HQ_Name (column renamed in new export)
 --   - Raw_SalesOrderLine: Status → CustomerProgramStatus (column renamed)
 --   - Raw_SalesOrderLine: checkOut no longer requires Excel serial conversion
---     (Power Query exports as VARCHAR date string directly)
 --   - Raw_SalesOrderLine: Mode_of_Delivery added (new column from AX source)
 --   - Raw_Customer: Name → HQ_Name fallback (Name not in new export)
---   - Raw_Customer: HQ Name → HQ_Name, Status → CustomerProgramStatus
 --   - Raw_SalesOrderLine baseline updated to 28,348 rows
 -- CHANGE LOG (v2.3.0):
 --   - Added Raw_CustomerReference + Raw_ProductMaster population
@@ -24,10 +25,11 @@
 --   - Replaced synthetic data load with real CSV sources
 -- =============================================================================
 -- PREREQUISITES:
---   data/real/fact_base.csv          (STG_LineLevel_1 export — 28,348 rows)
---   data/real/order_level_query.csv  (Order Level Query export — 2,277 rows)
---   data/real/contract_unified.csv   (Contract Unified export — 306 rows)
---   data/commodity_mapping.csv       (ItemID → CommodityID mapping — 3,789 rows)
+--   data/real/fact_base.csv           (STG_LineLevel_1 export — 28,348 rows)
+--   data/real/order_level_query.csv   (Order Level Query export — 2,277 rows)
+--   data/real/contract_unified.csv    (Contract Unified export — 306 rows)
+--   data/commodity_mapping.csv        (ItemID → CommodityID mapping)
+--   data/non_produce_items.csv        (Non-produce ItemID exclusion list — 13 rows)
 -- =============================================================================
 
 -- Truncate before reload (idempotent)
@@ -37,25 +39,13 @@ DELETE FROM Raw_ContractPricing;
 DELETE FROM Raw_Customer;
 DELETE FROM Raw_Item;
 DELETE FROM Raw_CommodityMapping;
+DELETE FROM Raw_NonProduceItems;
 DELETE FROM Raw_CustomerReference;
 DELETE FROM Raw_ProductMaster;
 
 -- ---------------------------------------------------------------------------
 -- 1. Raw_SalesOrderLine  ←  fact_base.csv
 -- Source: STG_LineLevel_1 Power Query export
--- Columns mapped from new export format (v2.4.0):
---   salesId               → salesId
---   loadId                → loadId
---   shipTo                → shipTo
---   HQ_Name               → HQ_Name        (was "HQ Name" with space in v2.x)
---   CustomerProgramStatus → CustomerProgramStatus (was Status in v2.x)
---   itemId                → Product_ID
---   checkOut              → checkOut        (VARCHAR date string; no serial conversion needed)
---   qty                   → qty
---   FOB_Post_Adj          → FOB_Post_Adj    (from BI_FactTable merge; COALESCE to price)
---   price                 → price
---   Mode_of_Delivery      → Mode_of_Delivery (new — from AX DlvMode field)
--- Removed: FactKey (not present in new export)
 -- ---------------------------------------------------------------------------
 INSERT INTO Raw_SalesOrderLine
 SELECT
@@ -157,7 +147,19 @@ SELECT
 FROM read_csv_auto('data/commodity_mapping.csv', header=true);
 
 -- ---------------------------------------------------------------------------
--- 7. Raw_CustomerReference  ←  Raw_Customer
+-- 7. Raw_NonProduceItems  ←  data/non_produce_items.csv
+-- Source: Copilot-reviewed non-produce ItemID exclusion list (UNK-009)
+-- ---------------------------------------------------------------------------
+INSERT INTO Raw_NonProduceItems
+SELECT
+    CAST(ItemID        AS VARCHAR)      AS ItemID,
+    CAST(ExcludeReason AS VARCHAR)      AS ExcludeReason,
+    'NON_PRODUCE_MAPPING'               AS SourceSystem,
+    CAST(CURRENT_TIMESTAMP AS VARCHAR)  AS BatchID
+FROM read_csv_auto('data/non_produce_items.csv', header=true);
+
+-- ---------------------------------------------------------------------------
+-- 8. Raw_CustomerReference  ←  Raw_Customer
 -- ---------------------------------------------------------------------------
 INSERT INTO Raw_CustomerReference
 SELECT
@@ -177,7 +179,7 @@ FROM Raw_Customer
 WHERE shipTo IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
--- 8. Raw_ProductMaster  ←  Raw_Item
+-- 9. Raw_ProductMaster  ←  Raw_Item
 -- ---------------------------------------------------------------------------
 INSERT INTO Raw_ProductMaster
 SELECT
@@ -209,6 +211,8 @@ UNION ALL
 SELECT 'Raw_Item',              COUNT(*) FROM Raw_Item
 UNION ALL
 SELECT 'Raw_LoadFreight',       COUNT(*) FROM Raw_LoadFreight
+UNION ALL
+SELECT 'Raw_NonProduceItems',   COUNT(*) FROM Raw_NonProduceItems
 UNION ALL
 SELECT 'Raw_ProductMaster',     COUNT(*) FROM Raw_ProductMaster
 UNION ALL
