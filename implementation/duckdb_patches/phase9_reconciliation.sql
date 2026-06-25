@@ -3,15 +3,24 @@
 -- TARGET:         DuckDB
 -- PURPOSE:        Confirm pipeline integrity from raw to reporting layer
 -- RUN:            After Phase 8 completes successfully
+-- VERSION:        2.1.0 — Staging→Fact SalesOrderLine check updated for
+--                 non-produce exclusion (2026-06-25)
+-- =============================================================================
+-- CHANGE LOG (v2.1.0):
+--   - 'Staging → Fact: SalesOrderLine (clean rows)' checkpoint updated.
+--     InputCount now joins Stg_SalesOrderLine to Stg_ProductMaster to exclude
+--     non-produce rows, matching the filter applied in fact_sales_order_line.sql.
+-- CHANGE LOG (v2.0.0):
+--   - Baseline updated: SalesOrderLine 27196 → 28348 (2026-06-24)
 -- =============================================================================
 
 SELECT
-    'Raw → Staging: SalesOrderLine'         AS CheckPoint,
+    'Raw → Staging: SalesOrderLine'          AS CheckPoint,
     (SELECT COUNT(*) FROM Raw_SalesOrderLine)                                               AS InputCount,
-    (SELECT COUNT(*) FROM Stg_SalesOrderLine)                                              AS OutputCount,
+    (SELECT COUNT(*) FROM Stg_SalesOrderLine)                                               AS OutputCount,
     CASE WHEN (SELECT COUNT(*) FROM Raw_SalesOrderLine)
               = (SELECT COUNT(*) FROM Stg_SalesOrderLine)
-         THEN 'PASS' ELSE 'INVESTIGATE' END                                                AS Status
+         THEN 'PASS' ELSE 'INVESTIGATE' END                                                 AS Status
 
 UNION ALL SELECT
     'Raw → Staging: LoadFreight',
@@ -22,12 +31,27 @@ UNION ALL SELECT
          THEN 'PASS' ELSE 'INVESTIGATE' END
 
 UNION ALL SELECT
-    'Staging → Fact: SalesOrderLine (clean rows)',
-    (SELECT COUNT(*) FROM Stg_SalesOrderLine WHERE IsCleanRow = 1 AND DeduplicationRank = 1),
+    'Staging → Fact: SalesOrderLine (clean rows, non-produce excluded)',
+    (SELECT COUNT(*)
+     FROM Stg_SalesOrderLine s
+     LEFT JOIN Stg_ProductMaster pm
+         ON UPPER(TRIM(s.ItemID)) = UPPER(TRIM(pm.ItemID))
+        AND pm.DeduplicationRank = 1
+     WHERE s.IsCleanRow = 1
+       AND s.DeduplicationRank = 1
+       AND COALESCE(pm.Flag_NonProduce, 0) = 0),
     (SELECT COUNT(*) FROM Fact_SalesOrderLine),
-    CASE WHEN (SELECT COUNT(*) FROM Stg_SalesOrderLine WHERE IsCleanRow = 1 AND DeduplicationRank = 1)
-              = (SELECT COUNT(*) FROM Fact_SalesOrderLine)
-         THEN 'PASS' ELSE 'INVESTIGATE' END
+    CASE WHEN
+        (SELECT COUNT(*)
+         FROM Stg_SalesOrderLine s
+         LEFT JOIN Stg_ProductMaster pm
+             ON UPPER(TRIM(s.ItemID)) = UPPER(TRIM(pm.ItemID))
+            AND pm.DeduplicationRank = 1
+         WHERE s.IsCleanRow = 1
+           AND s.DeduplicationRank = 1
+           AND COALESCE(pm.Flag_NonProduce, 0) = 0)
+        = (SELECT COUNT(*) FROM Fact_SalesOrderLine)
+    THEN 'PASS' ELSE 'INVESTIGATE' END
 
 UNION ALL SELECT
     'Staging → Fact: LoadFreight',
