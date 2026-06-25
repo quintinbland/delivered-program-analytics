@@ -31,3 +31,4 @@ pipeline_run.log
 SESSION_HANDOFF.md 
 non_produce_items.csv 
 commodity_mapping.csv 
+data/exports/ 
