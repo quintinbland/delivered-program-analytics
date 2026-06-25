@@ -1,20 +1,23 @@
 -- =============================================================================
 -- MODULE:      Fact Tables
 -- SCRIPT:      fact_sales_order_line.sql
--- INPUT:       Stg_SalesOrderLine, Dim_Customer, Dim_Product, Dim_ShipTo,
---              Dim_Date, Stg_ContractPricing, Fact_LoadFreight
+-- INPUT:       Stg_SalesOrderLine, Stg_ProductMaster, Dim_Customer, Dim_Product,
+--              Dim_ShipTo, Dim_Date, Stg_ContractPricing, Fact_LoadFreight
 -- OUTPUT:      Fact_SalesOrderLine
 -- DIALECT:     DuckDB (STRFTIME patch applied)
--- VERSION:     1.0.2 — Real data fixes (2026-06-24)
+-- VERSION:     1.1.0 — Non-produce exclusion via Stg_ProductMaster (2026-06-25)
 -- =============================================================================
+-- CHANGE LOG (v1.1.0):
+--   - Non-produce items excluded from fact output via LEFT JOIN to
+--     Stg_ProductMaster on ItemID; rows where Flag_NonProduce = 1 filtered
+--     in source CTE. Resolves UNK-009.
 -- CHANGE LOG (v1.0.2):
 --   - Removed s.ShipToID reference (not in Stg_SalesOrderLine v2.0)
 --     ShipToKey hardcoded to -1; Flag_ShipToNotInDim hardcoded to 0
 --   - Removed s.Flag_MissingShipToID (not in Stg_SalesOrderLine v2.0)
 --   - Removed BETWEEN date range filter from tier1/tier2/tier3 CTEs (UNK-001 resolved)
 --   - Removed cp.Flag_InvertedDateRange from tier1/tier2/tier3 CTEs (column removed)
---   - Flag_CandidateHierarchy_UNK001 retained for schema compatibility but
---     reflects resolved hierarchy (Contract > Commit > Open Market)
+--   - Flag_CandidateHierarchy_UNK001 retained for schema compatibility
 -- =============================================================================
 
 CREATE OR REPLACE TABLE Fact_SalesOrderLine AS
@@ -23,12 +26,17 @@ WITH
 
 -- ---------------------------------------------------------------------------
 -- STEP 1: Source from staging — primary record per natural key, clean only
+-- Non-produce items excluded via LEFT JOIN to Stg_ProductMaster
 -- ---------------------------------------------------------------------------
 source AS (
-    SELECT *
-    FROM Stg_SalesOrderLine
-    WHERE DeduplicationRank = 1
-      AND IsCleanRow = 1
+    SELECT s.*
+    FROM Stg_SalesOrderLine s
+    LEFT JOIN Stg_ProductMaster pm
+        ON UPPER(TRIM(s.ItemID)) = UPPER(TRIM(pm.ItemID))
+       AND pm.DeduplicationRank = 1
+    WHERE s.DeduplicationRank = 1
+      AND s.IsCleanRow = 1
+      AND COALESCE(pm.Flag_NonProduce, 0) = 0
 ),
 
 -- ---------------------------------------------------------------------------
