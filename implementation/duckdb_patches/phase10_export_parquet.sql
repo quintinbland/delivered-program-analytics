@@ -40,3 +40,4 @@ SELECT 'Rpt_ExceptionDashboard_Summary', COUNT(*) FROM Rpt_ExceptionDashboard_Su
 UNION ALL
 SELECT 'Rpt_CustomerScorecard',        COUNT(*) FROM Rpt_CustomerScorecard
 ORDER BY TableName;
+COPY (SELECT * FROM Rpt_LoadEfficiencyByShipTo) TO 'data/exports/Rpt_LoadEfficiencyByShipTo.parquet' (FORMAT PARQUET);

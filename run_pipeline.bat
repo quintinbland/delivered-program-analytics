@@ -3,19 +3,19 @@ REM ============================================================================
 REM  PIPELINE RUNNER -- Delivered Program Analytics
 REM  TARGET:   DuckDB (local)
 REM  PLATFORM: Windows
-REM  VERSION:  2.0.0 -- Rewritten without CALL :EXEC subroutine to eliminate
-REM            Windows batch partial label matching bug (2026-06-24)
+REM  VERSION:  2.1.0 -- Phase 8 extended (rpt_load_efficiency_by_shipto);
+REM            Phase 10 added (Parquet export for Power BI) (2026-06-25)
 REM  USAGE:    run_pipeline.bat [phase]
-REM            run_pipeline.bat         runs all phases 1-9
+REM            run_pipeline.bat         runs all phases 1-10
 REM            run_pipeline.bat 1       runs Phase 1 only
-REM            run_pipeline.bat 2       runs Phase 2 only
-REM            ... etc through 9
+REM            ... etc through 10
 REM =============================================================================
 REM  PREREQUISITES:
 REM    1. DuckDB CLI installed and on PATH (or in repo root)
 REM    2. Run from repo root directory
 REM    3. CSVs exported to data\real\ before running Phase 2
 REM    4. dim_date_duckdb.sql patch in implementation\duckdb_patches\
+REM    5. data\exports\ directory must exist before Phase 10
 REM =============================================================================
 
 SETLOCAL ENABLEDELAYEDEXPANSION
@@ -30,7 +30,7 @@ echo [!TS!] Pipeline run started >> %LOG%
 echo [!TS!] Pipeline run started
 
 IF "%PHASE%"=="" (
-    echo Running ALL phases 1-9...
+    echo Running ALL phases 1-10...
 ) ELSE (
     echo Running Phase %PHASE% only...
 )
@@ -316,6 +316,12 @@ echo   [!TS!] Running: Phase 8: rpt_customer_scorecard
 IF !ERRORLEVEL! NEQ 0 ( echo   [FAIL] Phase 8: rpt_customer_scorecard & echo [!TS!] FAIL: Phase 8: rpt_customer_scorecard >> %LOG% & GOTO FAILED )
 echo   [PASS] Phase 8: rpt_customer_scorecard & echo [!TS!] PASS: Phase 8: rpt_customer_scorecard >> %LOG%
 
+FOR /F "tokens=*" %%T IN ('powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"') DO SET TS=%%T
+echo   [!TS!] Running: Phase 8: rpt_load_efficiency_by_shipto
+%DDB% %DB% < "sql\reporting\rpt_load_efficiency_by_shipto.sql" >> %LOG% 2>&1
+IF !ERRORLEVEL! NEQ 0 ( echo   [FAIL] Phase 8: rpt_load_efficiency_by_shipto & echo [!TS!] FAIL: Phase 8: rpt_load_efficiency_by_shipto >> %LOG% & GOTO FAILED )
+echo   [PASS] Phase 8: rpt_load_efficiency_by_shipto & echo [!TS!] PASS: Phase 8: rpt_load_efficiency_by_shipto >> %LOG%
+
 :SKIP_P8
 IF "%PHASE%"=="8" GOTO DONE
 
@@ -335,6 +341,24 @@ IF !ERRORLEVEL! NEQ 0 ( echo   [FAIL] Phase 9: reconciliation & echo [!TS!] FAIL
 echo   [PASS] Phase 9: reconciliation & echo [!TS!] PASS: Phase 9: reconciliation >> %LOG%
 
 :SKIP_P9
+IF "%PHASE%"=="9" GOTO DONE
+
+REM =============================================================================
+REM  PHASE 10 -- Parquet Export for Power BI
+REM =============================================================================
+IF NOT "%PHASE%"=="" IF NOT "%PHASE%"=="10" GOTO SKIP_P10
+echo.
+echo ============================================================
+echo  PHASE 10 -- Parquet Export for Power BI
+echo ============================================================
+
+FOR /F "tokens=*" %%T IN ('powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"') DO SET TS=%%T
+echo   [!TS!] Running: Phase 10: parquet export
+%DDB% %DB% < "implementation\duckdb_patches\phase10_export_parquet.sql" >> %LOG% 2>&1
+IF !ERRORLEVEL! NEQ 0 ( echo   [FAIL] Phase 10: parquet export & echo [!TS!] FAIL: Phase 10: parquet export >> %LOG% & GOTO FAILED )
+echo   [PASS] Phase 10: parquet export & echo [!TS!] PASS: Phase 10: parquet export >> %LOG%
+
+:SKIP_P10
 
 REM =============================================================================
 REM  DONE
